@@ -59,13 +59,12 @@ function parseVop(message: Message): VopInfo | undefined {
 		report = Buffer.from(report, 'latin1').toString('utf8');
 	}
 	if (!result && report) {
-		const status = report.match(/<(?:Grp|Tx|Pmt)Sts>\s*([A-Z]{4})\s*<\//);
-		if (status) result = status[1];
-		if (!closeMatchName) {
-			// A close match may include the payee's actual registered name.
-			const nm = report.match(/<Nm>([^<]+)<\/Nm>/);
-			if (nm) closeMatchName = nm[1];
-		}
+		// Prefer a known VoP result code (ignore generic statuses like PART/ACSP).
+		const known = report.match(/<(?:Grp|Tx|Pmt)Sts>\s*(RCVC|RVMC|RVCM|RVNM|RVNA|PDNG)\s*<\//);
+		const anyStatus = report.match(/<(?:Grp|Tx|Pmt)Sts>\s*([A-Z]{4})\s*<\//);
+		result = known?.[1] ?? anyStatus?.[1];
+		// Note: this bank does not disclose the payee's actual name in the report,
+		// so closeMatchName is left from the EVPE group only (usually empty).
 	}
 
 	return {
