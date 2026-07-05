@@ -67,7 +67,7 @@ export class Dialog {
 			const message = this.createCurrentCustomerMessage();
 			const responseMessage = await this.httpClient.sendMessage(message);
 			await this.handlePartedMessages(message, responseMessage, this.currentInteraction);
-			await this.handleStatementContinuation(message, responseMessage, this.currentInteraction);
+			await this.handleStatementContinuation(responseMessage, this.currentInteraction);
 			clientResponse = this.currentInteraction.handleClientResponse(responseMessage);
 			this.checkEnded(clientResponse);
 			this.dialogId = clientResponse.dialogId;
@@ -117,7 +117,7 @@ export class Dialog {
 				: this.createCurrentCustomerMessage();
 			const responseMessage = await this.httpClient.sendMessage(message);
 			await this.handlePartedMessages(message, responseMessage, this.currentInteraction);
-			await this.handleStatementContinuation(message, responseMessage, this.currentInteraction);
+			await this.handleStatementContinuation(responseMessage, this.currentInteraction);
 			clientResponse = this.currentInteraction.handleClientResponse(responseMessage);
 			this.checkEnded(clientResponse);
 			this.dialogId = clientResponse.dialogId;
@@ -331,7 +331,6 @@ export class Dialog {
 	 * reports no further continuation. This yields the full history with a single TAN.
 	 */
 	private async handleStatementContinuation(
-		message: CustomerMessage,
 		responseMessage: Message,
 		interaction: CustomerInteraction,
 	) {
@@ -366,23 +365,12 @@ export class Dialog {
 				);
 			}
 
-			const orderSegment = message.segments.find(
-				(s) => s.header.segId === interaction.segId,
-			) as SegmentWithContinuationMark | undefined;
-			if (!orderSegment) {
-				throw new Error(
-					'Response signals continuation, but the corresponding order segment could not be found',
-				);
-			}
-			orderSegment.continuationMark = answer.params[0];
-
-			const hnhbkSegment = message.findSegment<HNHBKSegment>(HNHBK.Id);
-			if (!hnhbkSegment) {
-				throw new Error('HNHBK segment not found in message');
-			}
-			hnhbkSegment.msgNr = ++this.lastMessageNumber;
-
-			const nextResponseMessage = await this.httpClient.sendMessage(message);
+			// Build a fresh order message carrying the continuation mark. We must not
+			// reuse the previous message: after strong authentication the last message
+			// was the TAN message (HKTAN only) and does not contain the order segment.
+			// No HKTAN is added here — SCA was already completed for this order.
+			const continuationMessage = this.createContinuationMessage(interaction, answer.params[0]);
+			const nextResponseMessage = await this.httpClient.sendMessage(continuationMessage);
 			const nextSegment = nextResponseMessage.findSegment<StatementSegment>(responseSegId);
 			if (nextSegment) {
 				mergeStatementSegments(accumulator, nextSegment);
@@ -390,6 +378,47 @@ export class Dialog {
 
 			latest = nextResponseMessage;
 		}
+	}
+
+	/**
+	 * Builds a statement order message for an Aufsetzpunkt continuation: the same
+	 * order (with the continuation mark set) within the current dialog, WITHOUT an
+	 * HKTAN segment, because strong authentication was already completed.
+	 */
+	private createContinuationMessage(
+		interaction: CustomerOrderInteraction,
+		continuationMark: string,
+	): CustomerMessage {
+		this.lastMessageNumber++;
+		const message = new CustomerOrderMessage(
+			interaction.segId,
+			interaction.responseSegId,
+			this.dialogId,
+			this.lastMessageNumber,
+		);
+
+		const tanMethod = this.config.selectedTanMethod;
+		const isScaSupported = tanMethod && tanMethod.version >= 6;
+
+		if (this.config.userId && this.config.pin) {
+			message.sign(
+				this.config.countryCode,
+				this.config.bankId,
+				this.config.userId,
+				this.config.pin,
+				this.config.bankingInformation.systemId,
+				isScaSupported ? this.config.tanMethodId : undefined,
+			);
+		}
+
+		for (const segment of interaction.getSegments(this.config)) {
+			if (segment.header.segId === interaction.segId) {
+				(segment as SegmentWithContinuationMark).continuationMark = continuationMark;
+			}
+			message.addSegment(segment);
+		}
+
+		return message;
 	}
 
 	private checkEnded(response: ClientResponse) {
