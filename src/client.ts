@@ -24,6 +24,7 @@ import {
 import {
 	TransferInteraction,
 	type TransferResponse,
+	VopPollInteraction,
 } from './interactions/transferInteraction.js';
 import { buildSepaTransferMessage, pickSepaDescriptor } from './sepa.js';
 import { HKCCS } from './segments/HKCCS.js';
@@ -143,6 +144,10 @@ export class FinTSClient {
 		purpose?: string;
 		endToEndId?: string;
 		instant?: boolean;
+		// When set, this is the approval step (HKVPA) after the user confirmed VoP.
+		vopId?: string;
+		// The exact pain.001 from the initial step, re-sent verbatim on approval.
+		painMessage?: string;
 	}): Promise<TransferResponse> {
 		const instant = input.instant ?? false;
 		const account = this.config.getBankAccount(input.accountNumber);
@@ -150,44 +155,61 @@ export class FinTSClient {
 			throw Error(`Account ${input.accountNumber} has no IBAN; cannot transfer.`);
 		}
 		const painDescriptor = pickSepaDescriptor(this.getSupportedSepaFormats());
-		const painMessage = buildSepaTransferMessage({
-			painDescriptor,
-			debtorName: input.debtorName,
-			debtorIban: account.iban,
-			debtorBic: account.bic,
-			creditorName: input.creditorName,
-			creditorIban: input.creditorIban,
-			creditorBic: input.creditorBic,
-			amount: input.amount,
-			purpose: input.purpose,
-			endToEndId: input.endToEndId,
-		});
-		return (await this.startCustomerOrderInteraction(
+		const painMessage =
+			input.painMessage ??
+			buildSepaTransferMessage({
+				painDescriptor,
+				debtorName: input.debtorName,
+				debtorIban: account.iban,
+				debtorBic: account.bic,
+				creditorName: input.creditorName,
+				creditorIban: input.creditorIban,
+				creditorBic: input.creditorBic,
+				amount: input.amount,
+				purpose: input.purpose,
+				endToEndId: input.endToEndId,
+			});
+		const reportDescriptor = this.getVopReportFormat();
+
+		let response = (await this.startCustomerOrderInteraction(
 			new TransferInteraction({
 				accountNumber: input.accountNumber,
 				painMessage,
 				painDescriptor,
 				instant,
-				vopReportDescriptor: this.getVopReportFormat(),
+				vopReportDescriptor: reportDescriptor,
+				vopId: input.vopId,
 			}),
 		)) as TransferResponse;
-	}
+
+		// The approval step is not polled; return its result (usually requiresTan).
+		if (input.vopId) {
+			response.painMessage = painMessage;
+			return response;
+		}
+
+		// Asynchronous VoP: the bank returns a pollingId and asks to poll again
+		// until the actual check result is available.
+		let guard = 0;
+		while (response.vop?.pollingId && !response.vop.result && guard++ < 30) {
+			const wait = response.vop.waitForSeconds ?? 2;
+			await new Promise((resolve) => setTimeout(resolve, Math.max(1, wait) * 1000));
+			response = (await this.startCustomerOrderInteraction(
+				new VopPollInteraction(
+					response.vop.pollingId,
+					response.vop.aufsetzpunkt,
+					reportDescriptor ?? painDescriptor,
+				),
+			)) as TransferResponse;
+			}
+			response.painMessage = painMessage;
+			return response;
+		}
 
 	/**
-	 * Continues a SEPA transfer that required a TAN. When a vopId is provided (the
-	 * user approved a Verification-of-Payee result), the HKVPA execution order is
-	 * sent together with the TAN.
+	 * Continues a SEPA transfer (approval step) that required a TAN.
 	 */
-	async sepaTransferWithTan(
-		tanReference: string,
-		tan?: string,
-		vopId?: string,
-	): Promise<TransferResponse> {
-		const interaction = this.currentDialog?.currentInteraction;
-		if (interaction instanceof TransferInteraction) {
-			// Set (or clear) so the HKVPA order is sent only on the approval step.
-			interaction.approvalVopId = vopId;
-		}
+	async sepaTransferWithTan(tanReference: string, tan?: string): Promise<TransferResponse> {
 		return (await this.continueCustomerInteractionWithTan(
 			[HKCCS.Id, HKIPZ.Id],
 			tanReference,

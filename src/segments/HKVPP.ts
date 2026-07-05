@@ -6,7 +6,9 @@ import type { Segment } from '../segment.js';
 import { SegmentDefinition } from '../segmentDefinition.js';
 
 export type HKVPPSegment = Segment & {
-	supportedReports: { psrd: string[] };
+	// Single-element data group with a repeating psrd field: pass the values as an
+	// array (the encoder wraps it), e.g. ['urn:...pain.002.001.10'].
+	supportedReports: string[];
 	pollingId?: string;
 	maxQueries?: number;
 	aufsetzpunkt?: string;

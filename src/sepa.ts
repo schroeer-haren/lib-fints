@@ -20,8 +20,9 @@ export type SepaTransferData = {
 export function pickSepaDescriptor(supportedFormats: string[]): string {
 	const urn = (v: string) => `urn:iso:std:iso:20022:tech:xsd:${v}`;
 	const has = (v: string) => supportedFormats.some((f) => f.includes(v));
-	if (has('pain.001.001.03')) return urn('pain.001.001.03');
+	// Prefer the current pain.001.001.09; fall back to the older .03.
 	if (has('pain.001.001.09')) return urn('pain.001.001.09');
+	if (has('pain.001.001.03')) return urn('pain.001.001.03');
 	const anyCredit = supportedFormats.find((f) => /pain\.001\.001\.\d{2}/.test(f));
 	if (anyCredit) {
 		const m = anyCredit.match(/pain\.001\.001\.\d{2}/);
@@ -51,19 +52,21 @@ function makeId(prefix: string): string {
 	return `${prefix}${ts}${rand}`.slice(0, 35);
 }
 
-function finInstn(bic?: string): string {
-	// pain.001.001.03 / .003.03 allow an IBAN-only transfer via "NOTPROVIDED".
-	return bic
-		? `<FinInstnId><BIC>${xmlEscape(bic)}</BIC></FinInstnId>`
-		: `<FinInstnId><Othr><Id>NOTPROVIDED</Id></Othr></FinInstnId>`;
+// Debtor/creditor agent element. pain.001.001.09 uses <BICFI>, .03 uses <BIC>.
+// For an IBAN-only transfer without a BIC the agent is omitted (returns '').
+function agent(tag: 'DbtrAgt' | 'CdtrAgt', bic: string | undefined, isV09: boolean): string {
+	if (!bic) return '';
+	const bicTag = isV09 ? 'BICFI' : 'BIC';
+	return `<${tag}><FinInstnId><${bicTag}>${xmlEscape(bic)}</${bicTag}></FinInstnId></${tag}>`;
 }
 
 /**
- * Builds a pain.001 SEPA credit transfer message for a single payment. Works for
- * the pain.001.xxx.03 family (same structure, namespace = the given descriptor).
+ * Builds a pain.001 SEPA credit transfer message for a single payment. Supports
+ * the pain.001.001.03 and pain.001.001.09 structures (chosen by the descriptor).
  */
 export function buildSepaTransferMessage(data: SepaTransferData): string {
 	const namespace = data.painDescriptor;
+	const isV09 = /001\.09/.test(namespace);
 	const currency = data.currency ?? 'EUR';
 	const amount = formatAmount(data.amount);
 	const now = new Date();
@@ -71,6 +74,13 @@ export function buildSepaTransferMessage(data: SepaTransferData): string {
 	const msgId = makeId('M');
 	const pmtInfId = makeId('P');
 	const e2e = data.endToEndId?.trim() || 'NOTPROVIDED';
+	const reqdExctnDt = isV09
+		? `<ReqdExctnDt><Dt>1999-01-01</Dt></ReqdExctnDt>`
+		: `<ReqdExctnDt>1999-01-01</ReqdExctnDt>`;
+	// Debtor agent: we usually have the BIC; keep NOTPROVIDED only for .03 fallback.
+	const dbtrAgt = data.debtorBic
+		? agent('DbtrAgt', data.debtorBic, isV09)
+		: `<DbtrAgt><FinInstnId><Othr><Id>NOTPROVIDED</Id></Othr></FinInstnId></DbtrAgt>`;
 
 	return (
 		`<?xml version="1.0" encoding="UTF-8"?>` +
@@ -90,15 +100,15 @@ export function buildSepaTransferMessage(data: SepaTransferData): string {
 		`<NbOfTxs>1</NbOfTxs>` +
 		`<CtrlSum>${amount}</CtrlSum>` +
 		`<PmtTpInf><SvcLvl><Cd>SEPA</Cd></SvcLvl></PmtTpInf>` +
-		`<ReqdExctnDt>1999-01-01</ReqdExctnDt>` +
+		reqdExctnDt +
 		`<Dbtr><Nm>${xmlEscape(data.debtorName)}</Nm></Dbtr>` +
 		`<DbtrAcct><Id><IBAN>${xmlEscape(data.debtorIban)}</IBAN></Id></DbtrAcct>` +
-		`<DbtrAgt>${finInstn(data.debtorBic)}</DbtrAgt>` +
+		dbtrAgt +
 		`<ChrgBr>SLEV</ChrgBr>` +
 		`<CdtTrfTxInf>` +
 		`<PmtId><EndToEndId>${xmlEscape(e2e)}</EndToEndId></PmtId>` +
 		`<Amt><InstdAmt Ccy="${currency}">${amount}</InstdAmt></Amt>` +
-		`<CdtrAgt>${finInstn(data.creditorBic)}</CdtrAgt>` +
+		agent('CdtrAgt', data.creditorBic, isV09) +
 		`<Cdtr><Nm>${xmlEscape(data.creditorName)}</Nm></Cdtr>` +
 		`<CdtrAcct><Id><IBAN>${xmlEscape(data.creditorIban)}</IBAN></Id></CdtrAcct>` +
 		(data.purpose
