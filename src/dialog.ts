@@ -413,42 +413,24 @@ export class Dialog {
 
 	/**
 	 * Builds a statement order message for an Aufsetzpunkt continuation: the same
-	 * order (with the continuation mark set) within the current dialog, WITHOUT an
-	 * HKTAN segment, because strong authentication was already completed.
+	 * order as the normal request (including the HKTAN segment, which the bank
+	 * requires per BPD — otherwise it rejects with 9370 "insufficient signatures")
+	 * but with the continuation mark set. Because strong authentication was already
+	 * completed earlier in this dialog, the bank grants it without a new challenge
+	 * (return code 3076). This relies on `currentInteraction` still being the
+	 * statement order (the index only advances after a fully successful response).
 	 */
 	private createContinuationMessage(
 		interaction: CustomerOrderInteraction,
 		continuationMark: string,
 	): CustomerMessage {
-		this.lastMessageNumber++;
-		const message = new CustomerOrderMessage(
-			interaction.segId,
-			interaction.responseSegId,
-			this.dialogId,
-			this.lastMessageNumber,
-		);
-
-		const tanMethod = this.config.selectedTanMethod;
-		const isScaSupported = tanMethod && tanMethod.version >= 6;
-
-		if (this.config.userId && this.config.pin) {
-			message.sign(
-				this.config.countryCode,
-				this.config.bankId,
-				this.config.userId,
-				this.config.pin,
-				this.config.bankingInformation.systemId,
-				isScaSupported ? this.config.tanMethodId : undefined,
-			);
+		const message = this.createCurrentCustomerMessage();
+		const orderSegment = message.segments.find(
+			(s) => s.header.segId === interaction.segId,
+		) as SegmentWithContinuationMark | undefined;
+		if (orderSegment) {
+			orderSegment.continuationMark = continuationMark;
 		}
-
-		for (const segment of interaction.getSegments(this.config)) {
-			if (segment.header.segId === interaction.segId) {
-				(segment as SegmentWithContinuationMark).continuationMark = continuationMark;
-			}
-			message.addSegment(segment);
-		}
-
 		return message;
 	}
 
