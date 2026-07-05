@@ -4,6 +4,7 @@ import { Mt940Parser } from '../mt940parser.js';
 import type { Segment } from '../segment.js';
 import { HIKAZ, type HIKAZSegment } from '../segments/HIKAZ.js';
 import { HKKAZ, type HKKAZSegment } from '../segments/HKKAZ.js';
+import type { Statement } from '../statement.js';
 import { CustomerOrderInteraction, type StatementResponse } from './customerInteraction.js';
 
 export class StatementInteractionMT940 extends CustomerOrderInteraction {
@@ -37,15 +38,22 @@ export class StatementInteractionMT940 extends CustomerOrderInteraction {
 
 	handleResponse(response: Message, clientResponse: StatementResponse) {
 		const hikaz = response.findSegment<HIKAZSegment>(HIKAZ.Id);
-		if (hikaz?.bookedTransactions) {
-			try {
-				const parser = new Mt940Parser(hikaz.bookedTransactions);
-				clientResponse.statements = parser.parse();
-			} catch (error) {
-				console.warn('MT940 parsing failed:', error);
-				clientResponse.statements = [];
+		const statements: Statement[] = [];
+		try {
+			if (hikaz?.bookedTransactions) {
+				statements.push(...new Mt940Parser(hikaz.bookedTransactions).parse());
 			}
-		} else {
+			// Noted transactions (Vormerkposten) — not yet booked.
+			if (hikaz?.notedTransactions) {
+				const noted = new Mt940Parser(hikaz.notedTransactions).parse();
+				for (const st of noted) {
+					for (const t of st.transactions ?? []) t.pending = true;
+				}
+				statements.push(...noted);
+			}
+			clientResponse.statements = statements;
+		} catch (error) {
+			console.warn('MT940 parsing failed:', error);
 			clientResponse.statements = [];
 		}
 	}
