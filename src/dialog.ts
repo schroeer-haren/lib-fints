@@ -10,8 +10,10 @@ import { EndDialogInteraction } from './interactions/endDialogInteraction.js';
 import { InitDialogInteraction } from './interactions/initDialogInteraction.js';
 import { CustomerMessage, CustomerOrderMessage, type Message } from './message.js';
 import { PARTED, type PartedSegment } from './partedSegment.js';
-import type { SegmentWithContinuationMark } from './segment.js';
+import type { Segment, SegmentWithContinuationMark } from './segment.js';
 import { decode } from './segment.js';
+import { HICAZ } from './segments/HICAZ.js';
+import { HIKAZ } from './segments/HIKAZ.js';
 import { HKEND } from './segments/HKEND.js';
 import { HKTAN, type HKTANSegment } from './segments/HKTAN.js';
 import { HNHBK, type HNHBKSegment } from './segments/HNHBK.js';
@@ -65,6 +67,7 @@ export class Dialog {
 			const message = this.createCurrentCustomerMessage();
 			const responseMessage = await this.httpClient.sendMessage(message);
 			await this.handlePartedMessages(message, responseMessage, this.currentInteraction);
+			await this.handleStatementContinuation(message, responseMessage, this.currentInteraction);
 			clientResponse = this.currentInteraction.handleClientResponse(responseMessage);
 			this.checkEnded(clientResponse);
 			this.dialogId = clientResponse.dialogId;
@@ -114,6 +117,7 @@ export class Dialog {
 				: this.createCurrentCustomerMessage();
 			const responseMessage = await this.httpClient.sendMessage(message);
 			await this.handlePartedMessages(message, responseMessage, this.currentInteraction);
+			await this.handleStatementContinuation(message, responseMessage, this.currentInteraction);
 			clientResponse = this.currentInteraction.handleClientResponse(responseMessage);
 			this.checkEnded(clientResponse);
 			this.dialogId = clientResponse.dialogId;
@@ -316,6 +320,78 @@ export class Dialog {
 		}
 	}
 
+	/**
+	 * Follows the "Aufsetzpunkt" (continuation point, return code 3040) for
+	 * account statement orders (HKKAZ/HKCAZ). Many banks cap a single statement
+	 * response (e.g. 150 bookings) and signal that more data is available via a
+	 * 3040 answer with a continuation mark, WITHOUT splitting the message (so the
+	 * PARTED mechanism above does not apply). We re-send the same order within the
+	 * SAME dialog (no new strong authentication) and merge the additional booked
+	 * (and noted) transactions into the first response segment, until the bank
+	 * reports no further continuation. This yields the full history with a single TAN.
+	 */
+	private async handleStatementContinuation(
+		message: CustomerMessage,
+		responseMessage: Message,
+		interaction: CustomerInteraction,
+	) {
+		if (!(interaction instanceof CustomerOrderInteraction)) {
+			return;
+		}
+		// Only statement orders carry booked/noted transaction lists to merge.
+		const responseSegId = interaction.responseSegId;
+		if (responseSegId !== HIKAZ.Id && responseSegId !== HICAZ.Id) {
+			return;
+		}
+		// A split (PARTED) response is already fully assembled above.
+		if (responseMessage.findSegment(PARTED.Id)) {
+			return;
+		}
+		if (!responseMessage.hasReturnCode(3040)) {
+			return;
+		}
+
+		const accumulator = responseMessage.findSegment<StatementSegment>(responseSegId);
+		if (!accumulator) {
+			return;
+		}
+
+		let latest: Message = responseMessage;
+
+		while (latest.hasReturnCode(3040)) {
+			const answer = latest.getBankAnswers().find((a) => a.code === 3040);
+			if (!answer || !answer.params || answer.params.length === 0) {
+				throw new Error(
+					'Expected bank answer to contain continuation mark parameters (code 3040)',
+				);
+			}
+
+			const orderSegment = message.segments.find(
+				(s) => s.header.segId === interaction.segId,
+			) as SegmentWithContinuationMark | undefined;
+			if (!orderSegment) {
+				throw new Error(
+					'Response signals continuation, but the corresponding order segment could not be found',
+				);
+			}
+			orderSegment.continuationMark = answer.params[0];
+
+			const hnhbkSegment = message.findSegment<HNHBKSegment>(HNHBK.Id);
+			if (!hnhbkSegment) {
+				throw new Error('HNHBK segment not found in message');
+			}
+			hnhbkSegment.msgNr = ++this.lastMessageNumber;
+
+			const nextResponseMessage = await this.httpClient.sendMessage(message);
+			const nextSegment = nextResponseMessage.findSegment<StatementSegment>(responseSegId);
+			if (nextSegment) {
+				mergeStatementSegments(accumulator, nextSegment);
+			}
+
+			latest = nextResponseMessage;
+		}
+	}
+
 	private checkEnded(response: ClientResponse) {
 		if (
 			response.bankAnswers.some((answer) => answer.code === 100) ||
@@ -328,4 +404,45 @@ export class Dialog {
 	private getHttpClient(): HttpClient {
 		return new HttpClient(this.config.bankingUrl, this.config.debugEnabled);
 	}
+}
+
+/**
+ * Statement response segment (HIKAZ/HICAZ). For MT940 the transaction lists are
+ * a single raw string; for CAMT they are arrays of camt message strings.
+ */
+type StatementSegment = Segment & {
+	bookedTransactions?: string | string[];
+	notedTransactions?: string | string[];
+};
+
+/** Appends the transactions of a continuation page onto the accumulated segment. */
+function mergeStatementSegments(accumulator: StatementSegment, next: StatementSegment): void {
+	accumulator.bookedTransactions = appendTransactions(
+		accumulator.bookedTransactions,
+		next.bookedTransactions,
+	);
+	accumulator.notedTransactions = appendTransactions(
+		accumulator.notedTransactions,
+		next.notedTransactions,
+	);
+}
+
+function appendTransactions(
+	base: string | string[] | undefined,
+	extra: string | string[] | undefined,
+): string | string[] | undefined {
+	if (extra === undefined) {
+		return base;
+	}
+	if (base === undefined) {
+		return Array.isArray(extra) ? [...extra] : extra;
+	}
+	if (typeof base === 'string' && typeof extra === 'string') {
+		return base + extra;
+	}
+	if (Array.isArray(base) && Array.isArray(extra)) {
+		return [...base, ...extra];
+	}
+	// Mismatched shapes (should not happen for a given format) — keep the base.
+	return base;
 }
