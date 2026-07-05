@@ -386,7 +386,18 @@ export class Dialog {
 			// No HKTAN is added here — SCA was already completed for this order.
 			const continuationMessage = this.createContinuationMessage(interaction, answer.params[0]);
 			const nextResponseMessage = await this.httpClient.sendMessage(continuationMessage);
-			const nextSegment = nextResponseMessage.findSegment<StatementSegment>(responseSegId);
+			// The continuation page often arrives as a PARTED (binary-deferred) segment
+			// that must be decoded into the real HIKAZ/HICAZ before we can read it.
+			let nextSegment = nextResponseMessage.findSegment<StatementSegment>(responseSegId);
+			if (!nextSegment) {
+				const parted = nextResponseMessage.findSegment<PartedSegment>(PARTED.Id);
+				if (parted) {
+					const decoded = decode(parted.rawData);
+					if (decoded.header.segId === responseSegId) {
+						nextSegment = decoded as unknown as StatementSegment;
+					}
+				}
+			}
 			if (nextSegment) {
 				mergeStatementSegments(accumulator, nextSegment);
 			}
