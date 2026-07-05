@@ -31,6 +31,8 @@ export interface Transaction {
 	mandateReference?: string;
 	textKeyExtension?: string;
 	additionalInformation?: string;
+	// True for noted/pending entries (Vormerkposten) that are not yet booked.
+	pending?: boolean;
 }
 
 export interface Balance {

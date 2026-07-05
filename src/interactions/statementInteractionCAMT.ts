@@ -46,36 +46,41 @@ export class StatementInteractionCAMT extends CustomerOrderInteraction {
 		return [hkcaz];
 	}
 
+	private parseCamt(messages: string[], pending: boolean): Statement[] {
+		const statements: Statement[] = [];
+		for (const camtMessage of messages) {
+			// The camtMessage is initially decoded as latin1 but is really UTF-8;
+			// re-decode when the XML declares UTF-8 (single or double quotes).
+			const isUtf8Encoded = /<\?xml[^>]*encoding=['"]UTF-8['"][^>]*\?>/i.test(camtMessage);
+			const xmlString = isUtf8Encoded
+				? Buffer.from(camtMessage, 'latin1').toString('utf8')
+				: camtMessage;
+
+			const parsed = new CamtParser(xmlString).parse();
+			if (pending) {
+				for (const st of parsed) {
+					for (const t of st.transactions ?? []) t.pending = true;
+				}
+			}
+			statements.push(...parsed);
+		}
+		return statements;
+	}
+
 	handleResponse(response: Message, clientResponse: StatementResponse) {
 		const hicaz = response.findSegment<HICAZSegment>(HICAZ.Id);
-		if (hicaz?.bookedTransactions && hicaz.bookedTransactions.length > 0) {
-			try {
-				// Parse all CAMT messages (one per booking day) and combine statements
-				const allStatements: Statement[] = [];
-				for (const camtMessage of hicaz.bookedTransactions) {
-					// The regex looks for the XML declaration `<?xml ... ?>`
-					// and checks if it contains the attribute encoding="UTF-8".
-					// The 'i' flag makes the match case-insensitive (e.g., for "utf-8").
-					const isUtf8Encoded = /<\?xml[^>]*encoding="UTF-8"[^>]*\?>/i.test(camtMessage);
-
-					let xmlString: string = camtMessage;
-					if (isUtf8Encoded) {
-						// camtMessage is initially encoded as 'latin1' (ISO-8859-1), but actually contains UTF-8 data.
-						// Therefore, we need to first convert it back to a buffer using 'latin1', and then decode it as 'utf8'.
-						const intermediateBuffer = Buffer.from(camtMessage, 'latin1');
-						xmlString = intermediateBuffer.toString('utf8');
-					}
-
-					const parser = new CamtParser(xmlString);
-					const statements = parser.parse();
-					allStatements.push(...statements);
-				}
-				clientResponse.statements = allStatements;
-			} catch (error) {
-				console.warn('CAMT parsing failed:', error);
-				clientResponse.statements = [];
+		try {
+			const statements: Statement[] = [];
+			if (hicaz?.bookedTransactions?.length) {
+				statements.push(...this.parseCamt(hicaz.bookedTransactions, false));
 			}
-		} else {
+			// Noted transactions (Vormerkposten) — not yet booked.
+			if (hicaz?.notedTransactions?.length) {
+				statements.push(...this.parseCamt(hicaz.notedTransactions, true));
+			}
+			clientResponse.statements = statements;
+		} catch (error) {
+			console.warn('CAMT parsing failed:', error);
 			clientResponse.statements = [];
 		}
 	}
