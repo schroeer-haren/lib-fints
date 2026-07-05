@@ -17,11 +17,17 @@ export class Binary extends DataElement {
 			return '';
 		}
 
-		if (this.maxLength && value.length > this.maxLength) {
+		// The FinTS binary length prefix (@length@) counts BYTES, and messages are
+		// transmitted as UTF-8. Using the JS string length (UTF-16 code units) would
+		// under-count any non-ASCII character (e.g. umlauts in a SEPA name/purpose),
+		// which the bank rejects with "9110 ungültige Binärdaten".
+		const byteLength = Buffer.byteLength(value, 'utf8');
+
+		if (this.maxLength && byteLength > this.maxLength) {
 			throw Error(`the Binary value '${this.name}' must not exceed its maximum length`);
 		}
 
-		return `@${value.length}@${value}`;
+		return `@${byteLength}@${value}`;
 	}
 
 	decode(text: string) {
