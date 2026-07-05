@@ -262,7 +262,12 @@ export class Dialog {
 		}
 
 		if (requirement === TanMediaRequirement.Required) {
-			return this.config.tanMediaName ?? 'default';
+			// When a TAN medium is required but none was explicitly selected, send an
+			// empty designation instead of a made-up 'default'. Banks reject an unknown
+			// device name (e.g. "9955 Die Gerätebezeichnung ist unbekannt"), whereas an
+			// empty medium lets the bank use the user's registered device (works for
+			// single-device methods such as pushTAN).
+			return this.config.tanMediaName ?? '';
 		}
 
 		return this.config.tanMediaName;
