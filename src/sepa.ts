@@ -12,15 +12,22 @@ export type SepaTransferData = {
 	endToEndId?: string;
 };
 
-// Picks a pain descriptor we can generate (the pain.001.xxx.03 family shares the
-// same XML structure). Prefers a .03 format from the bank's supported list, then
-// the first supported one, else a sensible default.
+// Picks the SEPA credit-transfer (pain.001) descriptor as an ISO URN. The bank
+// advertises formats in its own notation (e.g. "sepade:xsd:pain.001.001.03.xsd"),
+// so we match the version as a substring and MUST pick a pain.001 format — never
+// a pain.008 (direct debit) one, which the bank rejects for a transfer (3999).
+// We prefer pain.001.001.03 because our XML builder targets that structure.
 export function pickSepaDescriptor(supportedFormats: string[]): string {
-	const DEFAULT = 'urn:iso:std:iso:20022:tech:xsd:pain.001.001.03';
-	const v03 = supportedFormats.find((f) => /pain\.001\.\d{3}\.03$/.test(f));
-	if (v03) return v03;
-	if (supportedFormats.length > 0) return supportedFormats[0];
-	return DEFAULT;
+	const urn = (v: string) => `urn:iso:std:iso:20022:tech:xsd:${v}`;
+	const has = (v: string) => supportedFormats.some((f) => f.includes(v));
+	if (has('pain.001.001.03')) return urn('pain.001.001.03');
+	if (has('pain.001.001.09')) return urn('pain.001.001.09');
+	const anyCredit = supportedFormats.find((f) => /pain\.001\.001\.\d{2}/.test(f));
+	if (anyCredit) {
+		const m = anyCredit.match(/pain\.001\.001\.\d{2}/);
+		if (m) return urn(m[0]);
+	}
+	return urn('pain.001.001.03');
 }
 
 function xmlEscape(value: string): string {
