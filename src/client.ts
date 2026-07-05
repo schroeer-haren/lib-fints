@@ -17,6 +17,10 @@ import {
 } from './interactions/portfolioInteraction.js';
 import { StatementInteractionCAMT } from './interactions/statementInteractionCAMT.js';
 import { StatementInteractionMT940 } from './interactions/statementInteractionMT940.js';
+import {
+	TanMediaInteraction,
+	type TanMediaResponse,
+} from './interactions/tanMediaInteraction.js';
 import { DKKKU } from './segments/DKKKU.js';
 import { HKCAZ } from './segments/HKCAZ.js';
 import { HKIDN } from './segments/HKIDN.js';
@@ -62,6 +66,27 @@ export class FinTSClient {
 	 */
 	selectTanMedia(tanMediaName: string): void {
 		this.config.selectTanMedia(tanMediaName);
+	}
+
+	/**
+	 * Whether the bank supports querying the list of registered TAN media (HKTAB).
+	 */
+	canGetTanMedia(): boolean {
+		return this.config.isTransactionSupported('HKTAB');
+	}
+
+	/**
+	 * Fetches the names of the user's registered TAN media/devices (HKTAB). These
+	 * are the valid "Gerätebezeichnungen" for methods that require a TAN medium
+	 * (e.g. pushTAN/SecureGo). Requires a prior synchronize() to have loaded the
+	 * bank parameters (BPD). Also fills the selected TAN method's activeTanMedia.
+	 * @returns the list of TAN media names
+	 */
+	async getTanMedia(): Promise<string[]> {
+		const response = (await this.startCustomerOrderInteraction(
+			new TanMediaInteraction(),
+		)) as TanMediaResponse;
+		return response.tanMediaList ?? [];
 	}
 
 	/**
