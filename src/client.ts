@@ -21,6 +21,14 @@ import {
 	TanMediaInteraction,
 	type TanMediaResponse,
 } from './interactions/tanMediaInteraction.js';
+import {
+	TransferInteraction,
+	type TransferResponse,
+} from './interactions/transferInteraction.js';
+import { buildSepaTransferMessage, pickSepaDescriptor } from './sepa.js';
+import { HKCCS } from './segments/HKCCS.js';
+import { HKIPZ } from './segments/HKIPZ.js';
+import type { HISPASParameter } from './segments/HISPAS.js';
 import { DKKKU } from './segments/DKKKU.js';
 import { HKCAZ } from './segments/HKCAZ.js';
 import { HKIDN } from './segments/HKIDN.js';
@@ -87,6 +95,81 @@ export class FinTSClient {
 			new TanMediaInteraction(),
 		)) as TanMediaResponse;
 		return response.tanMediaList ?? [];
+	}
+
+	/**
+	 * Whether the account supports a SEPA credit transfer (HKCCS) or, when
+	 * instant is true, an instant transfer (HKIPZ / Echtzeitüberweisung).
+	 */
+	canSepaTransfer(accountNumber: string, instant = false): boolean {
+		return this.config.isAccountTransactionSupported(
+			accountNumber,
+			instant ? HKIPZ.Id : HKCCS.Id,
+		);
+	}
+
+	/**
+	 * The SEPA pain formats the bank supports (from HISPAS), e.g.
+	 * ['urn:iso:std:iso:20022:tech:xsd:pain.001.001.03', ...].
+	 */
+	getSupportedSepaFormats(): string[] {
+		const params = this.config.getTransactionParameters<HISPASParameter>('HKSPA');
+		return params?.supportedSepaFormats ?? [];
+	}
+
+	/**
+	 * Initiates a SEPA single credit transfer from the given account. Requires
+	 * strong authentication: returns requiresTan and is continued via
+	 * sepaTransferWithTan.
+	 */
+	async sepaTransfer(input: {
+		accountNumber: string;
+		debtorName: string;
+		creditorName: string;
+		creditorIban: string;
+		creditorBic?: string;
+		amount: number;
+		purpose?: string;
+		endToEndId?: string;
+		instant?: boolean;
+	}): Promise<TransferResponse> {
+		const instant = input.instant ?? false;
+		const account = this.config.getBankAccount(input.accountNumber);
+		if (!account.iban) {
+			throw Error(`Account ${input.accountNumber} has no IBAN; cannot transfer.`);
+		}
+		const painDescriptor = pickSepaDescriptor(this.getSupportedSepaFormats());
+		const painMessage = buildSepaTransferMessage({
+			painDescriptor,
+			debtorName: input.debtorName,
+			debtorIban: account.iban,
+			debtorBic: account.bic,
+			creditorName: input.creditorName,
+			creditorIban: input.creditorIban,
+			creditorBic: input.creditorBic,
+			amount: input.amount,
+			purpose: input.purpose,
+			endToEndId: input.endToEndId,
+		});
+		return (await this.startCustomerOrderInteraction(
+			new TransferInteraction({
+				accountNumber: input.accountNumber,
+				painMessage,
+				painDescriptor,
+				instant,
+			}),
+		)) as TransferResponse;
+	}
+
+	/**
+	 * Continues a SEPA transfer that required a TAN.
+	 */
+	async sepaTransferWithTan(tanReference: string, tan?: string): Promise<TransferResponse> {
+		return (await this.continueCustomerInteractionWithTan(
+			[HKCCS.Id, HKIPZ.Id],
+			tanReference,
+			tan,
+		)) as TransferResponse;
 	}
 
 	/**

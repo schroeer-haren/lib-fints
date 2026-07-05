@@ -14,6 +14,7 @@ export * from './httpClient.js';
 export { AccountBalanceResponse } from './interactions/balanceInteraction.js';
 export { ClientResponse, StatementResponse } from './interactions/customerInteraction.js';
 export { PortfolioResponse } from './interactions/portfolioInteraction.js';
+export { TransferResponse } from './interactions/transferInteraction.js';
 export * from './message.js';
 export * from './mt535parser.js';
 export * from './mt940parser.js';
