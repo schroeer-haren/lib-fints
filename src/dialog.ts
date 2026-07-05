@@ -342,6 +342,13 @@ export class Dialog {
 		if (responseSegId !== HIKAZ.Id && responseSegId !== HICAZ.Id) {
 			return;
 		}
+		const debug = this.config.debugEnabled;
+		if (debug) {
+			const codes = responseMessage.getBankAnswers().map((a) => a.code);
+			console.log(
+				`[lib-fints][continuation] ${responseSegId} answer codes: ${codes.join(', ')}; parted=${!!responseMessage.findSegment(PARTED.Id)}; has3040=${responseMessage.hasReturnCode(3040)}`,
+			);
+		}
 		// A split (PARTED) response is already fully assembled above.
 		if (responseMessage.findSegment(PARTED.Id)) {
 			return;
@@ -356,6 +363,7 @@ export class Dialog {
 		}
 
 		let latest: Message = responseMessage;
+		let page = 1;
 
 		while (latest.hasReturnCode(3040)) {
 			const answer = latest.getBankAnswers().find((a) => a.code === 3040);
@@ -372,11 +380,24 @@ export class Dialog {
 			const continuationMessage = this.createContinuationMessage(interaction, answer.params[0]);
 			const nextResponseMessage = await this.httpClient.sendMessage(continuationMessage);
 			const nextSegment = nextResponseMessage.findSegment<StatementSegment>(responseSegId);
+			if (debug) {
+				const codes = nextResponseMessage.getBankAnswers().map((a) => a.code);
+				const size = Array.isArray(nextSegment?.bookedTransactions)
+					? nextSegment?.bookedTransactions.length
+					: (nextSegment?.bookedTransactions?.length ?? 0);
+				console.log(
+					`[lib-fints][continuation] page ${page + 1}: mark=${answer.params[0]}; got segment=${!!nextSegment}; bookedSize=${size}; codes: ${codes.join(', ')}`,
+				);
+			}
 			if (nextSegment) {
 				mergeStatementSegments(accumulator, nextSegment);
 			}
 
 			latest = nextResponseMessage;
+			page++;
+		}
+		if (debug) {
+			console.log(`[lib-fints][continuation] finished after ${page} page(s)`);
 		}
 	}
 
