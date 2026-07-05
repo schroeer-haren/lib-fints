@@ -343,10 +343,17 @@ export class Dialog {
 			return;
 		}
 		const debug = this.config.debugEnabled;
+		const acct = (interaction as unknown as { accountNumber?: string }).accountNumber ?? '?';
 		if (debug) {
 			const codes = responseMessage.getBankAnswers().map((a) => a.code);
+			const acc0 = responseMessage.findSegment<StatementSegment>(responseSegId);
+			const size0 = Array.isArray(acc0?.bookedTransactions)
+				? acc0?.bookedTransactions.length
+				: typeof acc0?.bookedTransactions === 'string'
+					? `str(${acc0?.bookedTransactions.length})`
+					: 'none';
 			console.log(
-				`[lib-fints][continuation] ${responseSegId} answer codes: ${codes.join(', ')}; parted=${!!responseMessage.findSegment(PARTED.Id)}; has3040=${responseMessage.hasReturnCode(3040)}`,
+				`[lib-fints][continuation] acct=${acct} ${responseSegId} codes: ${codes.join(', ')}; parted=${!!responseMessage.findSegment(PARTED.Id)}; has3040=${responseMessage.hasReturnCode(3040)}; page1Booked=${size0}`,
 			);
 		}
 		// A split (PARTED) response is already fully assembled above.
@@ -380,24 +387,27 @@ export class Dialog {
 			const continuationMessage = this.createContinuationMessage(interaction, answer.params[0]);
 			const nextResponseMessage = await this.httpClient.sendMessage(continuationMessage);
 			const nextSegment = nextResponseMessage.findSegment<StatementSegment>(responseSegId);
-			if (debug) {
-				const codes = nextResponseMessage.getBankAnswers().map((a) => a.code);
-				const size = Array.isArray(nextSegment?.bookedTransactions)
-					? nextSegment?.bookedTransactions.length
-					: (nextSegment?.bookedTransactions?.length ?? 0);
-				console.log(
-					`[lib-fints][continuation] page ${page + 1}: mark=${answer.params[0]}; got segment=${!!nextSegment}; bookedSize=${size}; codes: ${codes.join(', ')}`,
-				);
-			}
 			if (nextSegment) {
 				mergeStatementSegments(accumulator, nextSegment);
+			}
+			if (debug) {
+				const codes = nextResponseMessage.getBankAnswers().map((a) => a.code);
+				const pageSize = Array.isArray(nextSegment?.bookedTransactions)
+					? nextSegment?.bookedTransactions.length
+					: (nextSegment?.bookedTransactions?.length ?? 0);
+				const accSize = Array.isArray(accumulator.bookedTransactions)
+					? accumulator.bookedTransactions.length
+					: (accumulator.bookedTransactions?.length ?? 0);
+				console.log(
+					`[lib-fints][continuation] acct=${acct} page ${page + 1}: mark=${answer.params[0]}; gotSegment=${!!nextSegment}; pageBooked=${pageSize}; accBooked=${accSize}; nextHas3040=${nextResponseMessage.hasReturnCode(3040)}; codes: ${codes.join(', ')}`,
+				);
 			}
 
 			latest = nextResponseMessage;
 			page++;
 		}
 		if (debug) {
-			console.log(`[lib-fints][continuation] finished after ${page} page(s)`);
+			console.log(`[lib-fints][continuation] acct=${acct} finished after ${page} page(s)`);
 		}
 	}
 
