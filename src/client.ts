@@ -162,9 +162,20 @@ export class FinTSClient {
 	}
 
 	/**
-	 * Continues a SEPA transfer that required a TAN.
+	 * Continues a SEPA transfer that required a TAN. When a vopId is provided (the
+	 * user approved a Verification-of-Payee result), the HKVPA execution order is
+	 * sent together with the TAN.
 	 */
-	async sepaTransferWithTan(tanReference: string, tan?: string): Promise<TransferResponse> {
+	async sepaTransferWithTan(
+		tanReference: string,
+		tan?: string,
+		vopId?: string,
+	): Promise<TransferResponse> {
+		const interaction = this.currentDialog?.currentInteraction;
+		if (interaction instanceof TransferInteraction) {
+			// Set (or clear) so the HKVPA order is sent only on the approval step.
+			interaction.approvalVopId = vopId;
+		}
 		return (await this.continueCustomerInteractionWithTan(
 			[HKCCS.Id, HKIPZ.Id],
 			tanReference,

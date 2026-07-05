@@ -236,6 +236,12 @@ export class Dialog {
 			);
 		}
 
+		// Extra order segments for the continuation (e.g. HKVPA for VoP approval),
+		// added before the HKTAN.
+		for (const segment of this.currentInteraction.getTanContinuationSegments()) {
+			message.addSegment(segment);
+		}
+
 		if (this.config.userId && this.config.pin && this.config.tanMethodId) {
 			const hktan: HKTANSegment = {
 				header: { segId: HKTAN.Id, segNr: 0, version: this.config.selectedTanMethod?.version ?? 0 },

@@ -48,6 +48,12 @@ export abstract class CustomerInteraction {
 		return this.createSegments(config);
 	}
 
+	// Extra order segments to include in a TAN continuation message (besides the
+	// HKTAN). Default: none. Used e.g. to carry the VoP execution order (HKVPA).
+	getTanContinuationSegments(): Segment[] {
+		return [];
+	}
+
 	handleClientResponse(message: Message): ClientResponse {
 		const clientResponse = this.handleBaseResponse(message);
 
