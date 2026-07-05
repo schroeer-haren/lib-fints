@@ -29,6 +29,7 @@ import { buildSepaTransferMessage, pickSepaDescriptor } from './sepa.js';
 import { HKCCS } from './segments/HKCCS.js';
 import { HKIPZ } from './segments/HKIPZ.js';
 import type { HISPASParameter } from './segments/HISPAS.js';
+import type { HIVPPSParameter } from './segments/HIVPPS.js';
 import { DKKKU } from './segments/DKKKU.js';
 import { HKCAZ } from './segments/HKCAZ.js';
 import { HKIDN } from './segments/HKIDN.js';
@@ -118,6 +119,16 @@ export class FinTSClient {
 	}
 
 	/**
+	 * The pain.002 payment status report format the bank expects in a Verification
+	 * of Payee check request (HKVPP), from HIVPPS. Undefined if the bank does not
+	 * advertise VoP.
+	 */
+	getVopReportFormat(): string | undefined {
+		const params = this.config.getTransactionParameters<HIVPPSParameter>('HKVPP');
+		return params?.supportedReportFormats;
+	}
+
+	/**
 	 * Initiates a SEPA single credit transfer from the given account. Requires
 	 * strong authentication: returns requiresTan and is continued via
 	 * sepaTransferWithTan.
@@ -157,6 +168,7 @@ export class FinTSClient {
 				painMessage,
 				painDescriptor,
 				instant,
+				vopReportDescriptor: this.getVopReportFormat(),
 			}),
 		)) as TransferResponse;
 	}

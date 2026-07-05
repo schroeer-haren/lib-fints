@@ -37,6 +37,7 @@ import { HKTAN } from './HKTAN.js';
 import { HKVPA } from './HKVPA.js';
 import { HKVPP } from './HKVPP.js';
 import { HIVPP } from './HIVPP.js';
+import { HIVPPS } from './HIVPPS.js';
 import { HKVVB } from './HKVVB.js';
 import { HKWPD } from './HKWPD.js';
 import { HNHBK } from './HNHBK.js';
@@ -86,6 +87,7 @@ export function registerSegments() {
 	registerSegmentDefinition(new HKVPP());
 	registerSegmentDefinition(new HKVPA());
 	registerSegmentDefinition(new HIVPP());
+	registerSegmentDefinition(new HIVPPS());
 	registerSegmentDefinition(new HICAZ());
 	registerSegmentDefinition(new HICAZS());
 	registerSegmentDefinition(new HKWPD());
