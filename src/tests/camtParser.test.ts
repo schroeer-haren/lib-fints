@@ -1,6 +1,57 @@
 import { describe, expect, it } from 'vitest';
 import { CamtParser } from '../camtParser.js';
 
+const batchCamt = `<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08">
+  <BkToCstmrAcctRpt><Rpt>
+    <Id>batch</Id>
+    <Acct><Id><IBAN>DE06940594210000027227</IBAN></Id><Ccy>EUR</Ccy></Acct>
+    <Bal><Tp><CdOrPrtry><Cd>PRCD</Cd></CdOrPrtry></Tp><Amt Ccy="EUR">100.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Dt><Dt>2026-07-05</Dt></Dt></Bal>
+    <Bal><Tp><CdOrPrtry><Cd>CLBD</Cd></CdOrPrtry></Tp><Amt Ccy="EUR">98.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Dt><Dt>2026-07-06</Dt></Dt></Bal>
+    <Ntry>
+      <Amt Ccy="EUR">2.00</Amt>
+      <CdtDbtInd>DBIT</CdtDbtInd>
+      <Sts>BOOK</Sts>
+      <BookgDt><Dt>2026-07-06</Dt></BookgDt>
+      <ValDt><Dt>2026-07-06</Dt></ValDt>
+      <AddtlNtryInf>SEPA Sammel-Ueberweisung mit 2 Ueberweisungen</AddtlNtryInf>
+      <NtryDtls>
+        <Btch><NbOfTxs>2</NbOfTxs><TtlAmt Ccy="EUR">2.00</TtlAmt></Btch>
+        <TxDtls>
+          <Refs><EndToEndId>APPAAA111</EndToEndId></Refs>
+          <AmtDtls><TxAmt><Amt Ccy="EUR">1.00</Amt></TxAmt></AmtDtls>
+          <RltdPties><Cdtr><Nm>Empfaenger Eins</Nm></Cdtr><CdtrAcct><Id><IBAN>DE42760300800263534863</IBAN></Id></CdtrAcct></RltdPties>
+          <RmtInf><Ustrd>Rechnung A</Ustrd></RmtInf>
+        </TxDtls>
+        <TxDtls>
+          <Refs><EndToEndId>APPBBB222</EndToEndId></Refs>
+          <AmtDtls><TxAmt><Amt Ccy="EUR">1.00</Amt></TxAmt></AmtDtls>
+          <RltdPties><Cdtr><Nm>Empfaenger Zwei</Nm></Cdtr><CdtrAcct><Id><IBAN>DE30760300800263546428</IBAN></Id></CdtrAcct></RltdPties>
+          <RmtInf><Ustrd>Rechnung B</Ustrd></RmtInf>
+        </TxDtls>
+      </NtryDtls>
+    </Ntry>
+  </Rpt></BkToCstmrAcctRpt>
+</Document>`;
+
+describe('CamtParser batch (Sammelbuchung)', () => {
+	it('splits a resolved batch entry into sub-transactions with EndToEndIds', () => {
+		const [stmt] = new CamtParser(batchCamt).parse();
+		expect(stmt.transactions).toHaveLength(1);
+		const t = stmt.transactions[0];
+		expect(t.amount).toBe(-2); // aggregate = sum, DBIT
+		expect(t.e2eReference).toBe(''); // aggregate has no single E2E
+		expect(t.subTransactions).toHaveLength(2);
+		const [a, b] = t.subTransactions!;
+		expect(a.amount).toBe(-1);
+		expect(a.e2eReference).toBe('APPAAA111');
+		expect(a.remoteName).toBe('Empfaenger Eins');
+		expect(a.remoteAccountNumber).toBe('DE42760300800263534863');
+		expect(b.e2eReference).toBe('APPBBB222');
+		expect(b.purpose).toBe('Rechnung B');
+	});
+});
+
 describe('CamtParser', () => {
 	it('should parse CAMT.052 XML with balances and transactions', () => {
 		const camtXml = `<?xml version="1.0" encoding="UTF-8"?>

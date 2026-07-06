@@ -72,7 +72,13 @@ interface CamtEntry extends GenericXMLObject {
 	AddtlNtryInf?: string | { '#text': string };
 	BkTxCd?: CamtBankTransactionCode;
 	NtryDtls?: {
-		TxDtls?: CamtTransactionDetails;
+		// A batch (collective) booking carries several TxDtls (one per payment).
+		TxDtls?: CamtTransactionDetails | CamtTransactionDetails[];
+		Btch?: {
+			NbOfTxs?: string | { '#text': string };
+			TtlAmt?: unknown;
+			PmtInfId?: string | { '#text': string };
+		};
 	};
 }
 
@@ -501,57 +507,122 @@ export class CamtParser {
 
 			// Extract references
 			const accountServicerRef = this.getValueFromPath(entry, 'AcctSvcrRef') || '';
-			const endToEndId = this.getValueFromPath(entry, 'NtryDtls.TxDtls.Refs.EndToEndId') || '';
-			const mandateId = this.getValueFromPath(entry, 'NtryDtls.TxDtls.Refs.MndtId') || '';
-
-			// Extract transaction details
 			const additionalEntryInfo = this.getValueFromPath(entry, 'AddtlNtryInf') || '';
-			const remittanceInfo = this.getValueFromPath(entry, 'NtryDtls.TxDtls.RmtInf.Ustrd') || '';
 
-			// Extract remote party information based on transaction type
-			let remoteName = '';
-			let remoteIBAN = '';
-			let remoteBankId = '';
+			// A batch (collective) booking has several TxDtls — one per underlying
+			// payment. Normalise to an array so both cases share the same code.
+			const rawTxDtls = entry.NtryDtls?.TxDtls;
+			const txList: CamtTransactionDetails[] = rawTxDtls
+				? Array.isArray(rawTxDtls)
+					? rawTxDtls
+					: [rawTxDtls]
+				: [];
 
-			const txDtls = entry.NtryDtls?.TxDtls;
-			if (txDtls) {
-				if (isDebit) {
-					// For debit transactions, we want the creditor (receiving party)
-					remoteName = this.extractPartyName(txDtls, 'RltdPties.Cdtr');
-					remoteIBAN = this.getValueFromPath(txDtls, 'RltdPties.CdtrAcct.Id.IBAN') || '';
-					remoteBankId = this.extractBankId(txDtls, 'RltdAgts.CdtrAgt.FinInstnId');
-				} else {
-					// For credit transactions, we want the debtor (sending party)
-					remoteName = this.extractPartyName(txDtls, 'RltdPties.Dbtr');
-					remoteIBAN = this.getValueFromPath(txDtls, 'RltdPties.DbtrAcct.Id.IBAN') || '';
-					remoteBankId = this.extractBankId(txDtls, 'RltdAgts.DbtrAgt.FinInstnId');
+			// Build a Transaction from a single TxDtls (used for the single-booking
+			// case and for each sub-transaction of a batch booking).
+			const fromTxDtls = (txDtls: CamtTransactionDetails): Transaction => {
+				const subInd = this.getValueFromPath(txDtls, 'CdtDbtInd') || creditDebitInd;
+				const subDebit = subInd === 'DBIT';
+				const subAmtVal = parseFloat(
+					this.getValueFromPath(txDtls, 'Amt') ||
+						this.getValueFromPath(txDtls, 'AmtDtls.TxAmt.Amt') ||
+						'0',
+				);
+				const subAmount = subDebit ? -subAmtVal : subAmtVal;
+				const e2e = this.getValueFromPath(txDtls, 'Refs.EndToEndId') || '';
+				const mnd = this.getValueFromPath(txDtls, 'Refs.MndtId') || '';
+				const rmt = this.getValueFromPath(txDtls, 'RmtInf.Ustrd') || '';
+				const partyPath = subDebit ? 'RltdPties.Cdtr' : 'RltdPties.Dbtr';
+				const acctPath = subDebit
+					? 'RltdPties.CdtrAcct.Id.IBAN'
+					: 'RltdPties.DbtrAcct.Id.IBAN';
+				const agtPath = subDebit
+					? 'RltdAgts.CdtrAgt.FinInstnId'
+					: 'RltdAgts.DbtrAgt.FinInstnId';
+				let sbk = this.parseBankTransactionCode(txDtls);
+				if (!sbk.domainCode && !sbk.familyCode && !sbk.subFamilyCode) {
+					sbk = this.parseBankTransactionCode(entry);
 				}
-			}
-
-			// Extract bank transaction code structure (BkTxCd) - can be at entry level or TxDtls level
-			let bkTxCd = this.parseBankTransactionCode(entry);
-			if (!bkTxCd.domainCode && !bkTxCd.familyCode && !bkTxCd.subFamilyCode && txDtls) {
-				bkTxCd = this.parseBankTransactionCode(txDtls);
-			}
-
-			return {
-				valueDate: parsedValueDate,
-				entryDate,
-				fundsCode: bkTxCd.domainCode || creditDebitInd || '',
-				amount,
-				transactionType: bkTxCd.familyCode || '',
-				customerReference: endToEndId,
-				bankReference: accountServicerRef,
-				transactionCode: bkTxCd.subFamilyCode || '',
-				purpose: remittanceInfo,
-				remoteName,
-				remoteAccountNumber: remoteIBAN,
-				remoteBankId,
-				e2eReference: endToEndId,
-				mandateReference: mandateId,
-				additionalInformation: additionalEntryInfo,
-				bookingText: additionalEntryInfo,
+				return {
+					valueDate: parsedValueDate,
+					entryDate,
+					fundsCode: sbk.domainCode || subInd || '',
+					amount: subAmount,
+					transactionType: sbk.familyCode || '',
+					customerReference: e2e,
+					bankReference: accountServicerRef,
+					transactionCode: sbk.subFamilyCode || '',
+					purpose: rmt,
+					remoteName: this.extractPartyName(txDtls, partyPath),
+					remoteAccountNumber: this.getValueFromPath(txDtls, acctPath) || '',
+					remoteBankId: this.extractBankId(txDtls, agtPath),
+					e2eReference: e2e,
+					mandateReference: mnd,
+					additionalInformation: additionalEntryInfo,
+					bookingText: additionalEntryInfo,
+				};
 			};
+
+			// A batch is only "resolved" inside the camt (DK Fall A) when it carries
+			// several TxDtls that each have a real amount. Fall B/C deliver just the
+			// aggregate (or a degenerate TxDtls with only a GVC) — then the items are
+			// only in a separate camt.054 (EBICS), not splittable here.
+			const resolvedSubs =
+				txList.length > 1 ? txList.map(fromTxDtls).filter((s) => s.amount !== 0) : [];
+			const isBatch = resolvedSubs.length >= 2;
+
+			// Batch booking: keep the aggregate (entry) as the main transaction and
+			// attach the individual payments as sub-transactions.
+			if (isBatch) {
+				const bkTxCd = this.parseBankTransactionCode(entry);
+				return {
+					valueDate: parsedValueDate,
+					entryDate,
+					fundsCode: bkTxCd.domainCode || creditDebitInd || '',
+					amount,
+					transactionType: bkTxCd.familyCode || '',
+					customerReference: '',
+					bankReference: accountServicerRef,
+					transactionCode: bkTxCd.subFamilyCode || '',
+					purpose: additionalEntryInfo,
+					remoteName: '',
+					remoteAccountNumber: '',
+					remoteBankId: '',
+					e2eReference: '',
+					mandateReference: '',
+					additionalInformation: additionalEntryInfo,
+					bookingText: additionalEntryInfo,
+					subTransactions: resolvedSubs,
+				};
+			}
+
+			// Single booking: use the one TxDtls (if any) for e2e/party details.
+			const txDtls = txList[0];
+			if (!txDtls) {
+				const bkTxCd = this.parseBankTransactionCode(entry);
+				return {
+					valueDate: parsedValueDate,
+					entryDate,
+					fundsCode: bkTxCd.domainCode || creditDebitInd || '',
+					amount,
+					transactionType: bkTxCd.familyCode || '',
+					customerReference: '',
+					bankReference: accountServicerRef,
+					transactionCode: bkTxCd.subFamilyCode || '',
+					purpose: '',
+					remoteName: '',
+					remoteAccountNumber: '',
+					remoteBankId: '',
+					e2eReference: '',
+					mandateReference: '',
+					additionalInformation: additionalEntryInfo,
+					bookingText: additionalEntryInfo,
+				};
+			}
+			const single = fromTxDtls(txDtls);
+			// The single booking's amount/sign comes from the entry level.
+			single.amount = amount;
+			return single;
 		} catch (error) {
 			throw new CamtParsingError(
 				`Failed to parse transaction details: ${error instanceof Error ? error.message : 'Unknown error'}`,

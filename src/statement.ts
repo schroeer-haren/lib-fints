@@ -33,6 +33,10 @@ export interface Transaction {
 	additionalInformation?: string;
 	// True for noted/pending entries (Vormerkposten) that are not yet booked.
 	pending?: boolean;
+	// For a collective (batch) booking (Sammelbuchung): the individual underlying
+	// payments (camt NtryDtls/TxDtls), each with its own amount, counterparty and
+	// EndToEndId. Empty/undefined for a normal single booking.
+	subTransactions?: Transaction[];
 }
 
 export interface Balance {
