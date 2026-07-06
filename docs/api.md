@@ -79,6 +79,14 @@ The `TanMethod` object contains a property `tanMediaRequirement` and if this is 
 
 The property `activeTanMedia` contains a list of the TAN media names you can use for selection.
 
+If the media list is not already populated from the synchronization, you can query it explicitly (segment HKTAB) after a `synchronize()`:
+
+```typescript
+const mediaNames = await client.getTanMedia(); // string[]
+```
+
+This also fills `activeTanMedia` on the selected TAN method. Use `client.canGetTanMedia()` to check whether the bank supports it.
+
 ### Banking Information may be updated any time
 
 The `bankingInformation` is primarily obtained through the `synchronize()` calls as demonstrated above. However, it is possible that the banking information may have changed since the last synchronization call. To address this, the BPD and UPD are versioned, and with every transaction made, not just synchronizations, the currently used versions are provided to the bank. If any changes have occurred, the bank will send back new versions of the BPD and UPD respectively. This process is managed by the client, but it is essential to check the `bankingInformationUpdated` property, which is available in every response. This property indicates if there have been any changes, and it is important to persist the new version for future sessions. The most up-to-date version of the `bankingInformation` object can always be retrieved using `config.bankingInformation`.

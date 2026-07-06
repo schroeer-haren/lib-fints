@@ -6,7 +6,16 @@
 
 A Typescript/Javascript client library for Online-Banking via the FinTS 3.0 protocol with PIN/TAN, supporting PSD2 and decoupled TAN methods.
 
-> This is a fork. The original project is available at [robocode13/lib-fints](https://github.com/robocode13/lib-fints).
+> This is a fork of [robocode13/lib-fints](https://github.com/robocode13/lib-fints) that adds outgoing **SEPA payments** (credit transfers, instant transfers, collective transfers, direct debits), **Verification of Payee**, and richer statement parsing (pending entries, collective bookings, transparent pagination).
+
+## Features
+
+- **Read**: account balance, statements (MT940 & CAMT), securities portfolio, credit card statements
+- **SEPA payments**: single & collective credit transfers, instant/real-time transfers, single & collective direct debits ("Lastschrift")
+- **Verification of Payee (VoP)** before a transfer is executed
+- **Statement details**: pending entries ("Vormerkposten"), split collective bookings ("Sammelbuchung"), transparent multi-page pagination
+- **TAN handling**: TAN challenges, decoupled TAN methods, TAN media selection & query
+- **Sessions**: persist and restore banking information (BPD/UPD) between sessions
 
 ## Installation
 
@@ -31,7 +40,8 @@ Note that most banks require a TAN method to be selected before account data is 
 
 - [Getting Started](docs/getting-started.md) – prerequisites, product registration, installation and a complete usage example
 - [API Guide](docs/api.md) – handling TAN challenges, restoring sessions from saved banking information, TAN media and debugging
-- [Supported Transactions](docs/transactions.md) – transaction methods, capability checks, parameters and TAN continuation
+- [Supported Transactions](docs/transactions.md) – transaction methods, capability checks, parameters, TAN continuation and statement details
+- [SEPA Payments](docs/payments.md) – credit transfers, instant transfers, collective transfers, direct debits and Verification of Payee
 - [Contributing & Development](docs/contributing.md) – how to build, lint and test the project
 
 The `docs/` folder also contains the official FinTS 3.0 specification PDFs.
@@ -40,7 +50,6 @@ The `docs/` folder also contains the official FinTS 3.0 specification PDFs.
 
 - Only FinTS 3.0 is supported (older versions may not work)
 - Only PIN/TAN security is supported (including decoupled TAN methods)
-- No support for payment transactions or transfers yet
 
 Implementing further transactions should be straight forward and contributions are highly appreciated.
 
