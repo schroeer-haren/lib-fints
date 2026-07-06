@@ -253,11 +253,10 @@ export function buildSepaDirectDebitMessage(data: SepaDirectDebitData): string {
 	const nbOfTxs = data.payments.length;
 	const ctrlSum = formatAmount(collectiveSum(data.payments));
 	const cdtrAgt = data.creditorBic ? agent('CdtrAgt', data.creditorBic, isV08) : '';
-	// Requested collection date: plain ISODate in .02, wrapped in <Dt> in .08
-	// (DateAndDateTime2Choice). This is the key .02→.08 structural difference.
-	const reqdColltnDt = isV08
-		? `<ReqdColltnDt><Dt>${data.requestedCollectionDate}</Dt></ReqdColltnDt>`
-		: `<ReqdColltnDt>${data.requestedCollectionDate}</ReqdColltnDt>`;
+	// Requested collection date. In pain.008 — BOTH .02 and .08 — ReqdColltnDt is
+	// a plain ISODate (unlike pain.001.001.09's ReqdExctnDt, which is a
+	// DateAndDateTime2Choice needing <Dt>). Verified against the ISO pain.008 XSDs.
+	const reqdColltnDt = `<ReqdColltnDt>${data.requestedCollectionDate}</ReqdColltnDt>`;
 	const cdtrSchmeId =
 		`<CdtrSchmeId><Id><PrvtId><Othr>` +
 		`<Id>${xmlEscape(data.creditorId)}</Id>` +
