@@ -3,9 +3,11 @@ export interface Statement {
 	relatedReference?: string;
 	account?: string;
 	number?: string;
-	openingBalance: Balance;
+	// A noted/pending (Vormerkposten) CAMT report carries entries but no
+	// balance, so these may be undefined. Balance-dependent code must guard.
+	openingBalance?: Balance;
 	transactions: Transaction[];
-	closingBalance: Balance;
+	closingBalance?: Balance;
 	availableBalance?: Balance;
 	forwardBalances?: Balance[];
 }

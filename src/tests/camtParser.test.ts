@@ -1116,4 +1116,64 @@ describe('CamtParser', () => {
 		expect(transaction.client).toBeUndefined();
 		expect(transaction.textKeyExtension).toBeUndefined();
 	});
+
+	// A Vormerkposten report (Sparkasse): one PDNG entry, NO balance element.
+	// It must not fail the whole response — keep the entry, mark it pending,
+	// leave balances undefined. (Regression for "No balance information found".)
+	it('should keep a pending (PDNG) entry from a report without balances', () => {
+		const camtXml = `<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08">
+	<BkToCstmrAcctRpt>
+		<Rpt>
+			<Id>camt0528_ONLINEBA</Id>
+			<CreDtTm>2026-07-06T13:25:00+02:00</CreDtTm>
+			<Acct><Id><IBAN>DE23266500011001013109</IBAN></Id><Ccy>EUR</Ccy></Acct>
+			<Ntry>
+				<Amt Ccy="EUR">0.02</Amt>
+				<CdtDbtInd>CRDT</CdtDbtInd>
+				<Sts><Cd>PDNG</Cd></Sts>
+				<BookgDt><Dt>2026-07-06</Dt></BookgDt>
+				<ValDt><Dt>2026-07-13</Dt></ValDt>
+				<AcctSvcrRef>2026-07-06-13.00.26.897159</AcctSvcrRef>
+				<NtryDtls><TxDtls>
+					<Amt Ccy="EUR">0.02</Amt>
+					<RmtInf><Ustrd>SAMMEL-LS-EINZUG</Ustrd></RmtInf>
+				</TxDtls></NtryDtls>
+				<AddtlNtryInf>SAMMEL-LS-EINZUG</AddtlNtryInf>
+			</Ntry>
+		</Rpt>
+	</BkToCstmrAcctRpt>
+</Document>`;
+
+		const parser = new CamtParser(camtXml);
+		const statements = parser.parse();
+
+		expect(statements).toHaveLength(1);
+		const statement = statements[0];
+		// No balance in the report → balances stay undefined (app guards on these).
+		expect(statement.openingBalance).toBeUndefined();
+		expect(statement.closingBalance).toBeUndefined();
+
+		expect(statement.transactions).toHaveLength(1);
+		const tx = statement.transactions[0];
+		expect(tx.pending).toBe(true);
+		expect(tx.amount).toBe(0.02);
+		expect(tx.bankReference).toBe('2026-07-06-13.00.26.897159');
+	});
+
+	// A genuinely empty report (no balance, no entries) is skipped entirely.
+	it('should skip an empty report with neither balance nor entries', () => {
+		const camtXml = `<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08">
+	<BkToCstmrAcctRpt>
+		<Rpt>
+			<Id>empty</Id>
+			<Acct><Id><IBAN>DE23266500011001013109</IBAN></Id><Ccy>EUR</Ccy></Acct>
+		</Rpt>
+	</BkToCstmrAcctRpt>
+</Document>`;
+
+		const parser = new CamtParser(camtXml);
+		expect(parser.parse()).toHaveLength(0);
+	});
 });

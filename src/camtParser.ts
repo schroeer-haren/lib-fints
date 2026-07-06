@@ -289,14 +289,9 @@ export class CamtParser {
 			let openingBalance = balances.openingBalance;
 			let closingBalance = balances.closingBalance;
 
-			// If we don't have both opening and closing, try to use what we have
-			if (!openingBalance && !closingBalance) {
-				// If we have available balance, use it as closing balance
-				if (balances.availableBalance) {
-					closingBalance = balances.availableBalance;
-				} else {
-					throw new CamtParsingError(`No balance information found in CAMT report ${reportNumber}`);
-				}
+			// If we have an available balance but no closing, use it as closing.
+			if (!openingBalance && !closingBalance && balances.availableBalance) {
+				closingBalance = balances.availableBalance;
 			}
 
 			// If missing opening balance, create a zero balance for the same date as closing
@@ -316,12 +311,16 @@ export class CamtParser {
 			// Parse transactions
 			const transactions = this.parseTransactions(report, reportNumber);
 
-			// At this point we should have both balances, otherwise throw an error
-			if (!openingBalance || !closingBalance) {
-				throw new CamtParsingError(
-					`Unable to determine required balances for CAMT report ${reportNumber}`,
-				);
+			// A report with neither balances nor entries is an empty intraday report
+			// (Sparkasse returns these) — nothing to book, skip it.
+			if (!openingBalance && !closingBalance && transactions.length === 0) {
+				return null;
 			}
+
+			// A noted/pending (Vormerkposten) report carries entries but no balance.
+			// Keep it: return the transactions with undefined balances so the app
+			// stores them as noted; balance-dependent code already guards on both
+			// balances being present.
 
 			return {
 				account,
@@ -509,6 +508,13 @@ export class CamtParser {
 			const accountServicerRef = this.getValueFromPath(entry, 'AcctSvcrRef') || '';
 			const additionalEntryInfo = this.getValueFromPath(entry, 'AddtlNtryInf') || '';
 
+			// Entry status: a "PDNG" (pending) entry is a Vormerkposten — mark it so
+			// the app stores it as noted rather than a final booking, even when the
+			// bank delivers it in the booked channel of the CAMT response.
+			const entryStatus =
+				this.getValueFromPath(entry, 'Sts.Cd') || this.getValueFromPath(entry, 'Sts') || '';
+			const pending = entryStatus === 'PDNG' ? true : undefined;
+
 			// A batch (collective) booking has several TxDtls — one per underlying
 			// payment. Normalise to an array so both cases share the same code.
 			const rawTxDtls = entry.NtryDtls?.TxDtls;
@@ -560,6 +566,7 @@ export class CamtParser {
 					mandateReference: mnd,
 					additionalInformation: additionalEntryInfo,
 					bookingText: additionalEntryInfo,
+					pending,
 				};
 			};
 
@@ -593,6 +600,7 @@ export class CamtParser {
 					additionalInformation: additionalEntryInfo,
 					bookingText: additionalEntryInfo,
 					subTransactions: resolvedSubs,
+					pending,
 				};
 			}
 
@@ -617,6 +625,7 @@ export class CamtParser {
 					mandateReference: '',
 					additionalInformation: additionalEntryInfo,
 					bookingText: additionalEntryInfo,
+					pending,
 				};
 			}
 			const single = fromTxDtls(txDtls);
