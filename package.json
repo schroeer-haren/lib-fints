@@ -43,6 +43,10 @@
 		"type": "git",
 		"url": "git+https://github.com/schroeer-haren/lib-fints.git"
 	},
+	"homepage": "https://github.com/schroeer-haren/lib-fints/tree/main/docs#readme",
+	"bugs": {
+		"url": "https://github.com/schroeer-haren/lib-fints/issues"
+	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.10",
 		"@types/node": "^20.19.41",
