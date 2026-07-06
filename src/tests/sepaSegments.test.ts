@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { Segment } from '../segment.js';
 import { getSegmentDefinition, registerSegments } from '../segments/registry.js';
 
 registerSegments();
@@ -12,7 +13,12 @@ const base = {
 
 function encode(segId: string, extra: Record<string, unknown> = {}): string {
 	const def = getSegmentDefinition(segId)!;
-	return def.encode({ ...base, ...extra, header: { segId, segNr: 3, version: 1 } });
+	const seg = {
+		...base,
+		...extra,
+		header: { segId, segNr: 3, version: 1 },
+	} as unknown as Segment;
+	return def.encode(seg);
 }
 
 describe('SEPA transfer/debit segment layouts', () => {
@@ -40,7 +46,7 @@ describe('SEPA transfer/debit segment layouts', () => {
 			sepaDescriptor: base.sepaDescriptor,
 			sepaPainMessage: base.sepaPainMessage,
 			header: { segId: 'HKIPZ', segNr: 3, version: 1 },
-		});
+		} as unknown as Segment);
 		expect(wire).not.toMatch(/0,02:EUR/);
 	});
 });
