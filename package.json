@@ -1,6 +1,6 @@
 {
 	"name": "@schroeer-haren/lib-fints",
-	"version": "1.4.8",
+	"version": "1.4.9",
 	"description": "Typescript/Javascript client library for Online-Banking via the FinTS 3.0 protocol with PIN/TAN",
 	"engines": {
 		"node": ">=18.0.0"
