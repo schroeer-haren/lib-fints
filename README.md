@@ -10,8 +10,22 @@ A Typescript/Javascript client library for Online-Banking via the FinTS 3.0 prot
 
 ## Installation
 
+This fork is published to **GitHub Packages** as `@schroeer-haren/lib-fints`. Add an `.npmrc` next to your `package.json` telling npm where to find the scope:
+
 ```
-npm i lib-fints
+@schroeer-haren:registry=https://npm.pkg.github.com
+```
+
+GitHub Packages requires authentication even for reads, so log in once (a GitHub token with the `read:packages` scope):
+
+```
+npm login --scope=@schroeer-haren --registry=https://npm.pkg.github.com
+```
+
+Then install:
+
+```
+npm i @schroeer-haren/lib-fints
 ```
 
 Requires Node.js >= 18. The only runtime dependency is `fast-xml-parser` (used for CAMT statement parsing).
