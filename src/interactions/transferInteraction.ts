@@ -267,14 +267,24 @@ export class CollectiveTransferInteraction extends CustomerOrderInteraction {
 		}
 		const bankAccount = init.getBankAccount(this.params.accountNumber);
 
-		const seg: HKCCMSegment | HKIPMSegment = {
-			header: { segId: this.segId, segNr: 0, version },
-			account: { iban: bankAccount.iban, bic: bankAccount.bic },
-			sumAmount: this.params.sumAmount,
-			requestSingleBooking: this.params.requestSingleBooking,
-			sepaDescriptor: this.params.painDescriptor,
-			sepaPainMessage: this.params.painMessage,
-		};
+		// HKIPM (instant) has no "Einzelbuchung gewünscht" element; only HKCCM does.
+		// The individual-vs-collective wish is carried in the pain (BtchBookg) too.
+		const seg: HKCCMSegment | HKIPMSegment = this.params.instant
+			? {
+					header: { segId: this.segId, segNr: 0, version },
+					account: { iban: bankAccount.iban, bic: bankAccount.bic },
+					sumAmount: this.params.sumAmount,
+					sepaDescriptor: this.params.painDescriptor,
+					sepaPainMessage: this.params.painMessage,
+				}
+			: {
+					header: { segId: this.segId, segNr: 0, version },
+					account: { iban: bankAccount.iban, bic: bankAccount.bic },
+					sumAmount: this.params.sumAmount,
+					requestSingleBooking: this.params.requestSingleBooking,
+					sepaDescriptor: this.params.painDescriptor,
+					sepaPainMessage: this.params.painMessage,
+				};
 
 		if (this.params.vopId) {
 			// Approval step: execution order (HKVPA) with the batch.
