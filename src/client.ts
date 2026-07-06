@@ -239,8 +239,10 @@ export class FinTSClient {
 
 	/**
 	 * Initiates a SEPA collective (batch) transfer — one order with multiple
-	 * payments, authorised by a single TAN. Continued via sepaTransferWithTan (for
-	 * instant, sepaCollectiveTransferWithTan). No Verification of Payee is sent.
+	 * payments, authorised by a single TAN. When the bank offers Verification of
+	 * Payee, an HKVPP name check is sent with the batch and the (possibly async)
+	 * result is returned in response.vop; the approval is then re-sent with vopId.
+	 * Continued via sepaCollectiveTransferWithTan.
 	 */
 	async sepaCollectiveTransfer(input: {
 		accountNumber: string;
@@ -249,6 +251,10 @@ export class FinTSClient {
 		instant?: boolean;
 		// N = one collective (Sammel) booking, J = each payment booked individually.
 		singleBooking?: boolean;
+		// When set, this is the approval step (HKVPA) after the user confirmed VoP.
+		vopId?: string;
+		// The exact pain.001 from the initial step, re-sent verbatim on approval.
+		painMessage?: string;
 	}): Promise<TransferResponse> {
 		const instant = input.instant ?? false;
 		if (input.payments.length === 0) {
@@ -260,16 +266,21 @@ export class FinTSClient {
 		}
 		const singleBooking = input.singleBooking ?? true;
 		const painDescriptor = pickSepaDescriptor(this.getSupportedSepaFormats());
-		const painMessage = buildSepaCollectiveTransferMessage({
-			painDescriptor,
-			debtorName: input.debtorName,
-			debtorIban: account.iban,
-			debtorBic: account.bic,
-			payments: input.payments,
-			singleBooking,
-		});
+		const painMessage =
+			input.painMessage ??
+			buildSepaCollectiveTransferMessage({
+				painDescriptor,
+				debtorName: input.debtorName,
+				debtorIban: account.iban,
+				debtorBic: account.bic,
+				payments: input.payments,
+				singleBooking,
+			});
+		// Only request VoP when the bank actually advertises it (HIVPPS); otherwise
+		// submit the batch on its own.
+		const reportDescriptor = this.getVopReportFormat();
 
-		const response = (await this.startCustomerOrderInteraction(
+		let response = (await this.startCustomerOrderInteraction(
 			new CollectiveTransferInteraction({
 				accountNumber: input.accountNumber,
 				painMessage,
@@ -277,8 +288,31 @@ export class FinTSClient {
 				instant,
 				sumAmount: { value: collectiveSum(input.payments), currency: 'EUR' },
 				requestSingleBooking: singleBooking,
+				vopReportDescriptor: reportDescriptor,
+				vopId: input.vopId,
 			}),
 		)) as TransferResponse;
+
+		// The approval step is not polled; return its result (usually requiresTan).
+		if (input.vopId) {
+			response.painMessage = painMessage;
+			return response;
+		}
+
+		// Asynchronous VoP: the bank returns a pollingId and asks to poll again
+		// until the actual check result is available.
+		let guard = 0;
+		while (response.vop?.pollingId && !response.vop.result && guard++ < 30) {
+			const wait = response.vop.waitForSeconds ?? 2;
+			await new Promise((resolve) => setTimeout(resolve, Math.max(1, wait) * 1000));
+			response = (await this.startCustomerOrderInteraction(
+				new VopPollInteraction(
+					response.vop.pollingId,
+					response.vop.aufsetzpunkt,
+					reportDescriptor ?? painDescriptor,
+				),
+			)) as TransferResponse;
+		}
 		response.painMessage = painMessage;
 		return response;
 	}
