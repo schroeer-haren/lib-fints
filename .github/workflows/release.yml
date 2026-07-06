@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  packages: write # required to publish to GitHub Packages via GITHUB_TOKEN
+  id-token: write # required for npm trusted publishing (OIDC) and provenance
 
 jobs:
   publish:
@@ -20,9 +20,11 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24.x
-          registry-url: 'https://npm.pkg.github.com'
-          scope: '@schroeer-haren'
+          registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
+
+      - name: Upgrade npm (trusted publishing needs npm >= 11.5.1)
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: npm ci
@@ -41,7 +43,5 @@ jobs:
       - name: Test (Vitest)
         run: npm test
 
-      - name: Publish to GitHub Packages
+      - name: Publish to npm (trusted publishing via OIDC)
         run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

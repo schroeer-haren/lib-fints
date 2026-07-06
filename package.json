@@ -48,7 +48,9 @@
 		"url": "https://github.com/schroeer-haren/lib-fints/issues"
 	},
 	"publishConfig": {
-		"registry": "https://npm.pkg.github.com"
+		"registry": "https://registry.npmjs.org",
+		"access": "public",
+		"provenance": true
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.10",
