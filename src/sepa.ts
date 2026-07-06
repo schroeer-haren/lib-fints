@@ -253,9 +253,10 @@ export function buildSepaDirectDebitMessage(data: SepaDirectDebitData): string {
 	const nbOfTxs = data.payments.length;
 	const ctrlSum = formatAmount(collectiveSum(data.payments));
 	const cdtrAgt = data.creditorBic ? agent('CdtrAgt', data.creditorBic, isV08) : '';
-	// Requested collection date: plain date in .02, wrapped like .09 credit in .08.
+	// Requested collection date: plain ISODate in .02, wrapped in <Dt> in .08
+	// (DateAndDateTime2Choice). This is the key .02→.08 structural difference.
 	const reqdColltnDt = isV08
-		? `<ReqdColltnDt>${data.requestedCollectionDate}</ReqdColltnDt>`
+		? `<ReqdColltnDt><Dt>${data.requestedCollectionDate}</Dt></ReqdColltnDt>`
 		: `<ReqdColltnDt>${data.requestedCollectionDate}</ReqdColltnDt>`;
 	const cdtrSchmeId =
 		`<CdtrSchmeId><Id><PrvtId><Othr>` +
