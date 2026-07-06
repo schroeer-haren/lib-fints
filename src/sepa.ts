@@ -60,6 +60,104 @@ function agent(tag: 'DbtrAgt' | 'CdtrAgt', bic: string | undefined, isV09: boole
 	return `<${tag}><FinInstnId><${bicTag}>${xmlEscape(bic)}</${bicTag}></FinInstnId></${tag}>`;
 }
 
+// A single payment (credit-transfer transaction) within a batch. Each payment
+// keeps its own EndToEndId so the booked transaction can be reconciled later.
+export type SepaPayment = {
+	creditorName: string;
+	creditorIban: string;
+	creditorBic?: string;
+	amount: number; // in EUR
+	purpose?: string;
+	endToEndId?: string;
+};
+
+// Builds one <CdtTrfTxInf> block for a payment.
+function creditTransferTx(p: SepaPayment, currency: string, isV09: boolean): string {
+	const amount = formatAmount(p.amount);
+	const e2e = p.endToEndId?.trim() || 'NOTPROVIDED';
+	return (
+		`<CdtTrfTxInf>` +
+		`<PmtId><EndToEndId>${xmlEscape(e2e)}</EndToEndId></PmtId>` +
+		`<Amt><InstdAmt Ccy="${currency}">${amount}</InstdAmt></Amt>` +
+		agent('CdtrAgt', p.creditorBic, isV09) +
+		`<Cdtr><Nm>${xmlEscape(p.creditorName)}</Nm></Cdtr>` +
+		`<CdtrAcct><Id><IBAN>${xmlEscape(p.creditorIban)}</IBAN></Id></CdtrAcct>` +
+		(p.purpose ? `<RmtInf><Ustrd>${xmlEscape(p.purpose)}</Ustrd></RmtInf>` : '') +
+		`</CdtTrfTxInf>`
+	);
+}
+
+export type SepaCollectiveData = {
+	painDescriptor: string;
+	debtorName: string;
+	debtorIban: string;
+	debtorBic?: string;
+	currency?: string;
+	payments: SepaPayment[];
+	// N = one collective (Sammel) booking, J = each payment booked individually.
+	singleBooking: boolean;
+};
+
+// The batch total, rounded to cents, as a number (for the FinTS Summenfeld).
+export function collectiveSum(payments: SepaPayment[]): number {
+	const cents = payments.reduce((sum, p) => sum + Math.round(p.amount * 100), 0);
+	return cents / 100;
+}
+
+/**
+ * Builds a pain.001 SEPA credit transfer message for MULTIPLE payments (a batch /
+ * Sammelüberweisung). All payments share one PmtInf block; NbOfTxs and CtrlSum
+ * are computed from the payments. BtchBookg reflects the singleBooking flag
+ * (singleBooking = true → BtchBookg = false, i.e. individual statement entries).
+ */
+export function buildSepaCollectiveTransferMessage(data: SepaCollectiveData): string {
+	const namespace = data.painDescriptor;
+	const isV09 = /001\.09/.test(namespace);
+	const currency = data.currency ?? 'EUR';
+	const now = new Date();
+	const creDtTm = now.toISOString().slice(0, 19);
+	const msgId = makeId('M');
+	const pmtInfId = makeId('P');
+	const nbOfTxs = data.payments.length;
+	const ctrlSum = formatAmount(collectiveSum(data.payments));
+	const reqdExctnDt = isV09
+		? `<ReqdExctnDt><Dt>1999-01-01</Dt></ReqdExctnDt>`
+		: `<ReqdExctnDt>1999-01-01</ReqdExctnDt>`;
+	const dbtrAgt = data.debtorBic
+		? agent('DbtrAgt', data.debtorBic, isV09)
+		: `<DbtrAgt><FinInstnId><Othr><Id>NOTPROVIDED</Id></Othr></FinInstnId></DbtrAgt>`;
+	const txs = data.payments.map((p) => creditTransferTx(p, currency, isV09)).join('');
+
+	return (
+		`<?xml version="1.0" encoding="UTF-8"?>` +
+		`<Document xmlns="${namespace}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` +
+		`<CstmrCdtTrfInitn>` +
+		`<GrpHdr>` +
+		`<MsgId>${msgId}</MsgId>` +
+		`<CreDtTm>${creDtTm}</CreDtTm>` +
+		`<NbOfTxs>${nbOfTxs}</NbOfTxs>` +
+		`<CtrlSum>${ctrlSum}</CtrlSum>` +
+		`<InitgPty><Nm>${xmlEscape(data.debtorName)}</Nm></InitgPty>` +
+		`</GrpHdr>` +
+		`<PmtInf>` +
+		`<PmtInfId>${pmtInfId}</PmtInfId>` +
+		`<PmtMtd>TRF</PmtMtd>` +
+		`<BtchBookg>${data.singleBooking ? 'false' : 'true'}</BtchBookg>` +
+		`<NbOfTxs>${nbOfTxs}</NbOfTxs>` +
+		`<CtrlSum>${ctrlSum}</CtrlSum>` +
+		`<PmtTpInf><SvcLvl><Cd>SEPA</Cd></SvcLvl></PmtTpInf>` +
+		reqdExctnDt +
+		`<Dbtr><Nm>${xmlEscape(data.debtorName)}</Nm></Dbtr>` +
+		`<DbtrAcct><Id><IBAN>${xmlEscape(data.debtorIban)}</IBAN></Id></DbtrAcct>` +
+		dbtrAgt +
+		`<ChrgBr>SLEV</ChrgBr>` +
+		txs +
+		`</PmtInf>` +
+		`</CstmrCdtTrfInitn>` +
+		`</Document>`
+	);
+}
+
 /**
  * Builds a pain.001 SEPA credit transfer message for a single payment. Supports
  * the pain.001.001.03 and pain.001.001.09 structures (chosen by the descriptor).

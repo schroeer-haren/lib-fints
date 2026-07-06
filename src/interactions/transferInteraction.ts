@@ -2,7 +2,10 @@ import type { FinTSConfig } from '../config.js';
 import type { Message } from '../message.js';
 import type { Segment } from '../segment.js';
 import { HKCCS, type HKCCSSegment } from '../segments/HKCCS.js';
+import { HKCCM, type HKCCMSegment } from '../segments/HKCCM.js';
 import { HKIPZ } from '../segments/HKIPZ.js';
+import { HKIPM, type HKIPMSegment } from '../segments/HKIPM.js';
+import type { Money } from '../dataGroups/Money.js';
 import { HIVPP, type HIVPPSegment } from '../segments/HIVPP.js';
 import { HKVPA, type HKVPASegment } from '../segments/HKVPA.js';
 import { HKVPP, type HKVPPSegment } from '../segments/HKVPP.js';
@@ -168,6 +171,56 @@ export class VopPollInteraction extends CustomerOrderInteraction {
 		const clientResponse = super.handleClientResponse(message) as TransferResponse;
 		clientResponse.vop = parseVop(message);
 		return clientResponse;
+	}
+
+	handleResponse(): void {}
+}
+
+export type CollectiveTransferParams = {
+	accountNumber: string;
+	painMessage: string;
+	painDescriptor: string;
+	instant: boolean;
+	// Total of all payments (Summenfeld).
+	sumAmount: Money;
+	// N = one collective (Sammel) booking, J = each payment booked individually.
+	requestSingleBooking: boolean;
+};
+
+/**
+ * Submits a SEPA collective (batch) transfer — HKCCM (or HKIPM for instant) —
+ * carrying a pain.001 with multiple payments. The whole batch is authorised with
+ * a single strong authentication (one TAN). No Verification of Payee is sent.
+ */
+export class CollectiveTransferInteraction extends CustomerOrderInteraction {
+	constructor(public params: CollectiveTransferParams) {
+		super(
+			params.instant ? HKIPM.Id : HKCCM.Id,
+			params.instant ? 'HIIPM' : 'HICCM',
+		);
+	}
+
+	createSegments(init: FinTSConfig): Segment[] {
+		if (!init.isAccountTransactionSupported(this.params.accountNumber, this.segId)) {
+			throw Error(
+				`Account ${this.params.accountNumber} does not support business transaction '${this.segId}'`,
+			);
+		}
+		const version = init.getMaxSupportedTransactionVersion(this.segId);
+		if (!version) {
+			throw Error(`There is no supported version for business transaction '${this.segId}'`);
+		}
+		const bankAccount = init.getBankAccount(this.params.accountNumber);
+
+		const seg: HKCCMSegment | HKIPMSegment = {
+			header: { segId: this.segId, segNr: 0, version },
+			account: { iban: bankAccount.iban, bic: bankAccount.bic },
+			sumAmount: this.params.sumAmount,
+			requestSingleBooking: this.params.requestSingleBooking,
+			sepaDescriptor: this.params.painDescriptor,
+			sepaPainMessage: this.params.painMessage,
+		};
+		return [seg];
 	}
 
 	handleResponse(): void {}

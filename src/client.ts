@@ -22,13 +22,22 @@ import {
 	type TanMediaResponse,
 } from './interactions/tanMediaInteraction.js';
 import {
+	CollectiveTransferInteraction,
 	TransferInteraction,
 	type TransferResponse,
 	VopPollInteraction,
 } from './interactions/transferInteraction.js';
-import { buildSepaTransferMessage, pickSepaDescriptor } from './sepa.js';
+import {
+	buildSepaCollectiveTransferMessage,
+	buildSepaTransferMessage,
+	collectiveSum,
+	pickSepaDescriptor,
+	type SepaPayment,
+} from './sepa.js';
 import { HKCCS } from './segments/HKCCS.js';
+import { HKCCM } from './segments/HKCCM.js';
 import { HKIPZ } from './segments/HKIPZ.js';
+import { HKIPM } from './segments/HKIPM.js';
 import type { HISPASParameter } from './segments/HISPAS.js';
 import type { HIVPPSParameter } from './segments/HIVPPS.js';
 import { DKKKU } from './segments/DKKKU.js';
@@ -212,6 +221,78 @@ export class FinTSClient {
 	async sepaTransferWithTan(tanReference: string, tan?: string): Promise<TransferResponse> {
 		return (await this.continueCustomerInteractionWithTan(
 			[HKCCS.Id, HKIPZ.Id],
+			tanReference,
+			tan,
+		)) as TransferResponse;
+	}
+
+	/**
+	 * Whether the account supports a SEPA collective (batch) transfer — HKCCM, or
+	 * HKIPM when instant. A batch is authorised with a single strong authentication.
+	 */
+	canCollectiveTransfer(accountNumber: string, instant = false): boolean {
+		return this.config.isAccountTransactionSupported(
+			accountNumber,
+			instant ? HKIPM.Id : HKCCM.Id,
+		);
+	}
+
+	/**
+	 * Initiates a SEPA collective (batch) transfer — one order with multiple
+	 * payments, authorised by a single TAN. Continued via sepaTransferWithTan (for
+	 * instant, sepaCollectiveTransferWithTan). No Verification of Payee is sent.
+	 */
+	async sepaCollectiveTransfer(input: {
+		accountNumber: string;
+		debtorName: string;
+		payments: SepaPayment[];
+		instant?: boolean;
+		// N = one collective (Sammel) booking, J = each payment booked individually.
+		singleBooking?: boolean;
+	}): Promise<TransferResponse> {
+		const instant = input.instant ?? false;
+		if (input.payments.length === 0) {
+			throw Error('A collective transfer needs at least one payment.');
+		}
+		const account = this.config.getBankAccount(input.accountNumber);
+		if (!account.iban) {
+			throw Error(`Account ${input.accountNumber} has no IBAN; cannot transfer.`);
+		}
+		const singleBooking = input.singleBooking ?? true;
+		const painDescriptor = pickSepaDescriptor(this.getSupportedSepaFormats());
+		const painMessage = buildSepaCollectiveTransferMessage({
+			painDescriptor,
+			debtorName: input.debtorName,
+			debtorIban: account.iban,
+			debtorBic: account.bic,
+			payments: input.payments,
+			singleBooking,
+		});
+
+		const response = (await this.startCustomerOrderInteraction(
+			new CollectiveTransferInteraction({
+				accountNumber: input.accountNumber,
+				painMessage,
+				painDescriptor,
+				instant,
+				sumAmount: { value: collectiveSum(input.payments), currency: 'EUR' },
+				requestSingleBooking: singleBooking,
+			}),
+		)) as TransferResponse;
+		response.painMessage = painMessage;
+		return response;
+	}
+
+	/**
+	 * Continues an instant SEPA collective transfer (HKIPM) that required a TAN.
+	 * For a non-instant collective transfer use sepaTransferWithTan.
+	 */
+	async sepaCollectiveTransferWithTan(
+		tanReference: string,
+		tan?: string,
+	): Promise<TransferResponse> {
+		return (await this.continueCustomerInteractionWithTan(
+			[HKCCM.Id, HKIPM.Id],
 			tanReference,
 			tan,
 		)) as TransferResponse;
