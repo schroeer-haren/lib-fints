@@ -16,7 +16,7 @@ This fork is published to **GitHub Packages** as `@schroeer-haren/lib-fints`. Ad
 @schroeer-haren:registry=https://npm.pkg.github.com
 ```
 
-GitHub Packages requires authentication even for reads, so log in once (a GitHub token with the `read:packages` scope):
+GitHub Packages requires authentication even for reads, so log in once with a GitHub token that has the `read:packages` scope:
 
 ```
 npm login --scope=@schroeer-haren --registry=https://npm.pkg.github.com

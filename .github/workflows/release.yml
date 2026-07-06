@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  packages: write
+  packages: write # required to publish to GitHub Packages via GITHUB_TOKEN
 
 jobs:
   publish:
