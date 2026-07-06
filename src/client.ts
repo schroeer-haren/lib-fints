@@ -28,14 +28,25 @@ import {
 	VopPollInteraction,
 } from './interactions/transferInteraction.js';
 import {
+	CollectiveDirectDebitInteraction,
+	DirectDebitInteraction,
+} from './interactions/debitInteraction.js';
+import {
 	buildSepaCollectiveTransferMessage,
+	buildSepaDirectDebitMessage,
 	buildSepaTransferMessage,
 	collectiveSum,
+	pickSepaDebitDescriptor,
 	pickSepaDescriptor,
+	type SepaDebitPayment,
+	type SepaLocalInstrument,
 	type SepaPayment,
+	type SepaSequenceType,
 } from './sepa.js';
 import { HKCCS } from './segments/HKCCS.js';
 import { HKCCM } from './segments/HKCCM.js';
+import { HKDSE } from './segments/HKDSE.js';
+import { HKDME } from './segments/HKDME.js';
 import { HKIPZ } from './segments/HKIPZ.js';
 import { HKIPM } from './segments/HKIPM.js';
 import type { HISPASParameter } from './segments/HISPAS.js';
@@ -330,6 +341,91 @@ export class FinTSClient {
 			tanReference,
 			tan,
 		)) as TransferResponse;
+	}
+
+	/**
+	 * Whether the account may submit a SEPA single direct debit (HKDSE).
+	 */
+	canDirectDebit(accountNumber: string): boolean {
+		return this.config.isAccountTransactionSupported(accountNumber, HKDSE.Id);
+	}
+
+	/**
+	 * Whether the account may submit a SEPA collective direct debit (HKDME).
+	 */
+	canCollectiveDirectDebit(accountNumber: string): boolean {
+		return this.config.isAccountTransactionSupported(accountNumber, HKDME.Id);
+	}
+
+	/**
+	 * Submits a SEPA direct debit (Lastschrifteinzug) — the account holder pulls
+	 * money from one or more debtors. With more than one debtor a collective
+	 * order (HKDME) is used, otherwise a single one (HKDSE). Continued via
+	 * sepaDirectDebitWithTan.
+	 */
+	async sepaDirectDebit(input: {
+		accountNumber: string;
+		creditorId: string;
+		sequenceType: SepaSequenceType;
+		localInstrument: SepaLocalInstrument;
+		requestedCollectionDate: string;
+		payments: SepaDebitPayment[];
+		// N = each collection booked individually, one collective credit else.
+		singleBooking?: boolean;
+	}): Promise<ClientResponse> {
+		if (input.payments.length === 0) {
+			throw Error('A direct debit needs at least one payment.');
+		}
+		const account = this.config.getBankAccount(input.accountNumber);
+		if (!account.iban) {
+			throw Error(`Account ${input.accountNumber} has no IBAN; cannot collect.`);
+		}
+		const collective = input.payments.length > 1;
+		const singleBooking = input.singleBooking ?? true;
+		const painDescriptor = pickSepaDebitDescriptor(this.getSupportedSepaFormats());
+		const painMessage = buildSepaDirectDebitMessage({
+			painDescriptor,
+			creditorName: account.holder1 ?? account.iban,
+			creditorIban: account.iban,
+			creditorBic: account.bic,
+			creditorId: input.creditorId,
+			sequenceType: input.sequenceType,
+			localInstrument: input.localInstrument,
+			requestedCollectionDate: input.requestedCollectionDate,
+			payments: input.payments,
+			singleBooking,
+		});
+
+		if (collective) {
+			return await this.startCustomerOrderInteraction(
+				new CollectiveDirectDebitInteraction({
+					accountNumber: input.accountNumber,
+					painMessage,
+					painDescriptor,
+					sumAmount: { value: collectiveSum(input.payments), currency: 'EUR' },
+					requestSingleBooking: singleBooking,
+				}),
+			);
+		}
+		return await this.startCustomerOrderInteraction(
+			new DirectDebitInteraction({
+				accountNumber: input.accountNumber,
+				painMessage,
+				painDescriptor,
+			}),
+		);
+	}
+
+	/**
+	 * Continues a SEPA direct debit (single HKDSE or collective HKDME) that
+	 * required a TAN.
+	 */
+	async sepaDirectDebitWithTan(tanReference: string, tan?: string): Promise<ClientResponse> {
+		return await this.continueCustomerInteractionWithTan(
+			[HKDSE.Id, HKDME.Id],
+			tanReference,
+			tan,
+		);
 	}
 
 	/**

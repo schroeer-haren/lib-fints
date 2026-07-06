@@ -26,6 +26,8 @@ import { HIWPD } from './HIWPD.js';
 import { HKCAZ } from './HKCAZ.js';
 import { HKCCS } from './HKCCS.js';
 import { HKCCM } from './HKCCM.js';
+import { HKDSE } from './HKDSE.js';
+import { HKDME } from './HKDME.js';
 import { HKEND } from './HKEND.js';
 import { HKIPZ } from './HKIPZ.js';
 import { HKIPM } from './HKIPM.js';
@@ -86,6 +88,8 @@ export function registerSegments() {
 	registerSegmentDefinition(new HKCAZ());
 	registerSegmentDefinition(new HKCCS());
 	registerSegmentDefinition(new HKCCM());
+	registerSegmentDefinition(new HKDSE());
+	registerSegmentDefinition(new HKDME());
 	registerSegmentDefinition(new HKIPZ());
 	registerSegmentDefinition(new HKIPM());
 	registerSegmentDefinition(new HKVPP());

@@ -99,7 +99,7 @@ export type SepaCollectiveData = {
 };
 
 // The batch total, rounded to cents, as a number (for the FinTS Summenfeld).
-export function collectiveSum(payments: SepaPayment[]): number {
+export function collectiveSum(payments: { amount: number }[]): number {
 	const cents = payments.reduce((sum, p) => sum + Math.round(p.amount * 100), 0);
 	return cents / 100;
 }
@@ -154,6 +154,147 @@ export function buildSepaCollectiveTransferMessage(data: SepaCollectiveData): st
 		txs +
 		`</PmtInf>` +
 		`</CstmrCdtTrfInitn>` +
+		`</Document>`
+	);
+}
+
+// ---------------------------------------------------------------------------
+// SEPA direct debit (Lastschrifteinzug) — pain.008. The account holder is the
+// creditor pulling money from one or more debtors. Each debit carries a mandate
+// (MndtId + signature date) and the whole batch a creditor scheme id (Gläubiger-
+// ID). Supports pain.008.001.02 (classic) and pain.008.001.08 (BICFI).
+// ---------------------------------------------------------------------------
+export type SepaSequenceType = 'FRST' | 'RCUR' | 'OOFF' | 'FNAL';
+export type SepaLocalInstrument = 'CORE' | 'B2B';
+
+export type SepaDebitPayment = {
+	debtorName: string;
+	debtorIban: string;
+	debtorBic?: string;
+	amount: number; // in EUR
+	purpose?: string;
+	endToEndId?: string;
+	// Mandate reference and its signature date (yyyy-MM-dd).
+	mandateId: string;
+	mandateSignatureDate: string;
+};
+
+export type SepaDirectDebitData = {
+	painDescriptor: string; // e.g. urn:iso:std:iso:20022:tech:xsd:pain.008.001.02
+	creditorName: string;
+	creditorIban: string;
+	creditorBic?: string;
+	// Creditor Identifier / Gläubiger-ID (DExxZZZ...).
+	creditorId: string;
+	currency?: string;
+	sequenceType: SepaSequenceType;
+	localInstrument: SepaLocalInstrument;
+	// Requested collection / due date (yyyy-MM-dd).
+	requestedCollectionDate: string;
+	payments: SepaDebitPayment[];
+	// N = each collection booked individually, one collective (Sammel) credit else.
+	singleBooking: boolean;
+};
+
+// Picks the pain.008 (direct debit) descriptor as an ISO URN from the bank's
+// advertised SEPA formats. Prefers pain.008.001.02 (universally supported by
+// German banks), then .08, then any pain.008.
+export function pickSepaDebitDescriptor(supportedFormats: string[]): string {
+	const urn = (v: string) => `urn:iso:std:iso:20022:tech:xsd:${v}`;
+	const has = (v: string) => supportedFormats.some((f) => f.includes(v));
+	if (has('pain.008.001.02')) return urn('pain.008.001.02');
+	if (has('pain.008.001.08')) return urn('pain.008.001.08');
+	const anyDebit = supportedFormats.find((f) => /pain\.008\.001\.\d{2}/.test(f));
+	if (anyDebit) {
+		const m = anyDebit.match(/pain\.008\.001\.\d{2}/);
+		if (m) return urn(m[0]);
+	}
+	return urn('pain.008.001.02');
+}
+
+// One <DrctDbtTxInf> block for a debtor. isV08 selects <BICFI> over <BIC>.
+function directDebitTx(p: SepaDebitPayment, currency: string, isV08: boolean): string {
+	const amount = formatAmount(p.amount);
+	const e2e = p.endToEndId?.trim() || 'NOTPROVIDED';
+	// Debtor agent: use the BIC when given, otherwise the IBAN-only marker.
+	const dbtrAgt = p.debtorBic
+		? agent('DbtrAgt', p.debtorBic, isV08)
+		: `<DbtrAgt><FinInstnId><Othr><Id>NOTPROVIDED</Id></Othr></FinInstnId></DbtrAgt>`;
+	return (
+		`<DrctDbtTxInf>` +
+		`<PmtId><EndToEndId>${xmlEscape(e2e)}</EndToEndId></PmtId>` +
+		`<InstdAmt Ccy="${currency}">${amount}</InstdAmt>` +
+		`<DrctDbtTx><MndtRltdInf>` +
+		`<MndtId>${xmlEscape(p.mandateId)}</MndtId>` +
+		`<DtOfSgntr>${xmlEscape(p.mandateSignatureDate)}</DtOfSgntr>` +
+		`<AmdmntInd>false</AmdmntInd>` +
+		`</MndtRltdInf></DrctDbtTx>` +
+		dbtrAgt +
+		`<Dbtr><Nm>${xmlEscape(p.debtorName)}</Nm></Dbtr>` +
+		`<DbtrAcct><Id><IBAN>${xmlEscape(p.debtorIban)}</IBAN></Id></DbtrAcct>` +
+		(p.purpose ? `<RmtInf><Ustrd>${xmlEscape(p.purpose)}</Ustrd></RmtInf>` : '') +
+		`</DrctDbtTxInf>`
+	);
+}
+
+/**
+ * Builds a pain.008 SEPA direct debit message for one or more debtors. All debits
+ * share one PmtInf (same sequence type, local instrument and due date); NbOfTxs
+ * and CtrlSum are computed from the payments. BtchBookg reflects singleBooking.
+ */
+export function buildSepaDirectDebitMessage(data: SepaDirectDebitData): string {
+	const namespace = data.painDescriptor;
+	const isV08 = /008\.001\.08/.test(namespace);
+	const currency = data.currency ?? 'EUR';
+	const now = new Date();
+	const creDtTm = now.toISOString().slice(0, 19);
+	const msgId = makeId('M');
+	const pmtInfId = makeId('P');
+	const nbOfTxs = data.payments.length;
+	const ctrlSum = formatAmount(collectiveSum(data.payments));
+	const cdtrAgt = data.creditorBic ? agent('CdtrAgt', data.creditorBic, isV08) : '';
+	// Requested collection date: plain date in .02, wrapped like .09 credit in .08.
+	const reqdColltnDt = isV08
+		? `<ReqdColltnDt>${data.requestedCollectionDate}</ReqdColltnDt>`
+		: `<ReqdColltnDt>${data.requestedCollectionDate}</ReqdColltnDt>`;
+	const cdtrSchmeId =
+		`<CdtrSchmeId><Id><PrvtId><Othr>` +
+		`<Id>${xmlEscape(data.creditorId)}</Id>` +
+		`<SchmeNm><Prtry>SEPA</Prtry></SchmeNm>` +
+		`</Othr></PrvtId></Id></CdtrSchmeId>`;
+	const txs = data.payments.map((p) => directDebitTx(p, currency, isV08)).join('');
+
+	return (
+		`<?xml version="1.0" encoding="UTF-8"?>` +
+		`<Document xmlns="${namespace}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` +
+		`<CstmrDrctDbtInitn>` +
+		`<GrpHdr>` +
+		`<MsgId>${msgId}</MsgId>` +
+		`<CreDtTm>${creDtTm}</CreDtTm>` +
+		`<NbOfTxs>${nbOfTxs}</NbOfTxs>` +
+		`<CtrlSum>${ctrlSum}</CtrlSum>` +
+		`<InitgPty><Nm>${xmlEscape(data.creditorName)}</Nm></InitgPty>` +
+		`</GrpHdr>` +
+		`<PmtInf>` +
+		`<PmtInfId>${pmtInfId}</PmtInfId>` +
+		`<PmtMtd>DD</PmtMtd>` +
+		`<BtchBookg>${data.singleBooking ? 'false' : 'true'}</BtchBookg>` +
+		`<NbOfTxs>${nbOfTxs}</NbOfTxs>` +
+		`<CtrlSum>${ctrlSum}</CtrlSum>` +
+		`<PmtTpInf>` +
+		`<SvcLvl><Cd>SEPA</Cd></SvcLvl>` +
+		`<LclInstrm><Cd>${data.localInstrument}</Cd></LclInstrm>` +
+		`<SeqTp>${data.sequenceType}</SeqTp>` +
+		`</PmtTpInf>` +
+		reqdColltnDt +
+		`<Cdtr><Nm>${xmlEscape(data.creditorName)}</Nm></Cdtr>` +
+		`<CdtrAcct><Id><IBAN>${xmlEscape(data.creditorIban)}</IBAN></Id></CdtrAcct>` +
+		cdtrAgt +
+		`<ChrgBr>SLEV</ChrgBr>` +
+		cdtrSchmeId +
+		txs +
+		`</PmtInf>` +
+		`</CstmrDrctDbtInitn>` +
 		`</Document>`
 	);
 }
