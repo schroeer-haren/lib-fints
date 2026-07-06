@@ -10,6 +10,10 @@ import type {
 	CustomerOrderInteraction,
 	StatementResponse,
 } from './interactions/customerInteraction.js';
+import {
+	CollectiveDirectDebitInteraction,
+	DirectDebitInteraction,
+} from './interactions/debitInteraction.js';
 import type { InitResponse } from './interactions/initDialogInteraction.js';
 import {
 	PortfolioInteraction,
@@ -17,20 +21,27 @@ import {
 } from './interactions/portfolioInteraction.js';
 import { StatementInteractionCAMT } from './interactions/statementInteractionCAMT.js';
 import { StatementInteractionMT940 } from './interactions/statementInteractionMT940.js';
-import {
-	TanMediaInteraction,
-	type TanMediaResponse,
-} from './interactions/tanMediaInteraction.js';
+import { TanMediaInteraction, type TanMediaResponse } from './interactions/tanMediaInteraction.js';
 import {
 	CollectiveTransferInteraction,
 	TransferInteraction,
 	type TransferResponse,
 	VopPollInteraction,
 } from './interactions/transferInteraction.js';
-import {
-	CollectiveDirectDebitInteraction,
-	DirectDebitInteraction,
-} from './interactions/debitInteraction.js';
+import { DKKKU } from './segments/DKKKU.js';
+import type { HISPASParameter } from './segments/HISPAS.js';
+import type { HIVPPSParameter } from './segments/HIVPPS.js';
+import { HKCAZ } from './segments/HKCAZ.js';
+import { HKCCM } from './segments/HKCCM.js';
+import { HKCCS } from './segments/HKCCS.js';
+import { HKDME } from './segments/HKDME.js';
+import { HKDSE } from './segments/HKDSE.js';
+import { HKIDN } from './segments/HKIDN.js';
+import { HKIPM } from './segments/HKIPM.js';
+import { HKIPZ } from './segments/HKIPZ.js';
+import { HKKAZ } from './segments/HKKAZ.js';
+import { HKSAL } from './segments/HKSAL.js';
+import { HKWPD } from './segments/HKWPD.js';
 import {
 	buildSepaCollectiveTransferMessage,
 	buildSepaDirectDebitMessage,
@@ -43,20 +54,6 @@ import {
 	type SepaPayment,
 	type SepaSequenceType,
 } from './sepa.js';
-import { HKCCS } from './segments/HKCCS.js';
-import { HKCCM } from './segments/HKCCM.js';
-import { HKDSE } from './segments/HKDSE.js';
-import { HKDME } from './segments/HKDME.js';
-import { HKIPZ } from './segments/HKIPZ.js';
-import { HKIPM } from './segments/HKIPM.js';
-import type { HISPASParameter } from './segments/HISPAS.js';
-import type { HIVPPSParameter } from './segments/HIVPPS.js';
-import { DKKKU } from './segments/DKKKU.js';
-import { HKCAZ } from './segments/HKCAZ.js';
-import { HKIDN } from './segments/HKIDN.js';
-import { HKKAZ } from './segments/HKKAZ.js';
-import { HKSAL } from './segments/HKSAL.js';
-import { HKWPD } from './segments/HKWPD.js';
 import type { TanMethod } from './tanMethod.js';
 
 export interface SynchronizeResponse extends InitResponse {}
@@ -124,10 +121,7 @@ export class FinTSClient {
 	 * instant is true, an instant transfer (HKIPZ / Echtzeitüberweisung).
 	 */
 	canSepaTransfer(accountNumber: string, instant = false): boolean {
-		return this.config.isAccountTransactionSupported(
-			accountNumber,
-			instant ? HKIPZ.Id : HKCCS.Id,
-		);
+		return this.config.isAccountTransactionSupported(accountNumber, instant ? HKIPZ.Id : HKCCS.Id);
 	}
 
 	/**
@@ -221,10 +215,10 @@ export class FinTSClient {
 					reportDescriptor ?? painDescriptor,
 				),
 			)) as TransferResponse;
-			}
-			response.painMessage = painMessage;
-			return response;
 		}
+		response.painMessage = painMessage;
+		return response;
+	}
 
 	/**
 	 * Continues a SEPA transfer (approval step) that required a TAN.
@@ -242,10 +236,7 @@ export class FinTSClient {
 	 * HKIPM when instant. A batch is authorised with a single strong authentication.
 	 */
 	canCollectiveTransfer(accountNumber: string, instant = false): boolean {
-		return this.config.isAccountTransactionSupported(
-			accountNumber,
-			instant ? HKIPM.Id : HKCCM.Id,
-		);
+		return this.config.isAccountTransactionSupported(accountNumber, instant ? HKIPM.Id : HKCCM.Id);
 	}
 
 	/**
@@ -421,11 +412,7 @@ export class FinTSClient {
 	 * required a TAN.
 	 */
 	async sepaDirectDebitWithTan(tanReference: string, tan?: string): Promise<ClientResponse> {
-		return await this.continueCustomerInteractionWithTan(
-			[HKDSE.Id, HKDME.Id],
-			tanReference,
-			tan,
-		);
+		return await this.continueCustomerInteractionWithTan([HKDSE.Id, HKDME.Id], tanReference, tan);
 	}
 
 	/**

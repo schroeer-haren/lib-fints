@@ -1,12 +1,12 @@
 import type { FinTSConfig } from '../config.js';
+import type { Money } from '../dataGroups/Money.js';
 import type { Message } from '../message.js';
 import type { Segment } from '../segment.js';
-import { HKCCS, type HKCCSSegment } from '../segments/HKCCS.js';
-import { HKCCM, type HKCCMSegment } from '../segments/HKCCM.js';
-import { HKIPZ } from '../segments/HKIPZ.js';
-import { HKIPM, type HKIPMSegment } from '../segments/HKIPM.js';
-import type { Money } from '../dataGroups/Money.js';
 import { HIVPP, type HIVPPSegment } from '../segments/HIVPP.js';
+import { HKCCM, type HKCCMSegment } from '../segments/HKCCM.js';
+import { HKCCS, type HKCCSSegment } from '../segments/HKCCS.js';
+import { HKIPM, type HKIPMSegment } from '../segments/HKIPM.js';
+import { HKIPZ } from '../segments/HKIPZ.js';
 import { HKVPA, type HKVPASegment } from '../segments/HKVPA.js';
 import { HKVPP, type HKVPPSegment } from '../segments/HKVPP.js';
 import { type ClientResponse, CustomerOrderInteraction } from './customerInteraction.js';
@@ -46,8 +46,7 @@ function worstVopResult(report: string): string | undefined {
 	const re = /<(?:Grp|Tx|Pmt)Sts>\s*([A-Z]{4})\s*<\//g;
 	let worst: string | undefined;
 	let worstSev = 0;
-	let m: RegExpExecArray | null;
-	while ((m = re.exec(report))) {
+	for (const m of report.matchAll(re)) {
 		const sev = VOP_SEVERITY[m[1]];
 		if (sev && sev > worstSev) {
 			worstSev = sev;
@@ -63,9 +62,8 @@ function vopStatusCounts(report: string): Record<string, number> | undefined {
 	const counts: Record<string, number> = {};
 	const a = /<DtldNbOfTxs>\s*(\d+)\s*<\/DtldNbOfTxs>\s*<DtldSts>\s*([A-Z]{4})\s*<\/DtldSts>/g;
 	const b = /<DtldSts>\s*([A-Z]{4})\s*<\/DtldSts>\s*<DtldNbOfTxs>\s*(\d+)\s*<\/DtldNbOfTxs>/g;
-	let m: RegExpExecArray | null;
-	while ((m = a.exec(report))) counts[m[2]] = (counts[m[2]] ?? 0) + Number(m[1]);
-	while ((m = b.exec(report))) counts[m[1]] = (counts[m[1]] ?? 0) + Number(m[2]);
+	for (const m of report.matchAll(a)) counts[m[2]] = (counts[m[2]] ?? 0) + Number(m[1]);
+	for (const m of report.matchAll(b)) counts[m[1]] = (counts[m[1]] ?? 0) + Number(m[2]);
 	return Object.keys(counts).length > 0 ? counts : undefined;
 }
 
@@ -140,10 +138,7 @@ function parseVop(message: Message): VopInfo | undefined {
  */
 export class TransferInteraction extends CustomerOrderInteraction {
 	constructor(public params: TransferParams) {
-		super(
-			params.instant ? HKIPZ.Id : HKCCS.Id,
-			params.instant ? 'HIIPZ' : 'HICCS',
-		);
+		super(params.instant ? HKIPZ.Id : HKCCS.Id, params.instant ? 'HIIPZ' : 'HICCS');
 	}
 
 	createSegments(init: FinTSConfig): Segment[] {
@@ -249,10 +244,7 @@ export type CollectiveTransferParams = {
  */
 export class CollectiveTransferInteraction extends CustomerOrderInteraction {
 	constructor(public params: CollectiveTransferParams) {
-		super(
-			params.instant ? HKIPM.Id : HKCCM.Id,
-			params.instant ? 'HIIPM' : 'HICCM',
-		);
+		super(params.instant ? HKIPM.Id : HKCCM.Id, params.instant ? 'HIIPM' : 'HICCM');
 	}
 
 	createSegments(init: FinTSConfig): Segment[] {

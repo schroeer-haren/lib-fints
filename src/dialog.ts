@@ -371,9 +371,7 @@ export class Dialog {
 		while (latest.hasReturnCode(3040)) {
 			const answer = latest.getBankAnswers().find((a) => a.code === 3040);
 			if (!answer || !answer.params || answer.params.length === 0) {
-				throw new Error(
-					'Expected bank answer to contain continuation mark parameters (code 3040)',
-				);
+				throw new Error('Expected bank answer to contain continuation mark parameters (code 3040)');
 			}
 
 			const continuationMessage = this.createContinuationMessage(interaction, answer.params[0]);
@@ -412,9 +410,9 @@ export class Dialog {
 		continuationMark: string,
 	): CustomerMessage {
 		const message = this.createCurrentCustomerMessage();
-		const orderSegment = message.segments.find(
-			(s) => s.header.segId === interaction.segId,
-		) as SegmentWithContinuationMark | undefined;
+		const orderSegment = message.segments.find((s) => s.header.segId === interaction.segId) as
+			| SegmentWithContinuationMark
+			| undefined;
 		if (orderSegment) {
 			orderSegment.continuationMark = continuationMark;
 		}

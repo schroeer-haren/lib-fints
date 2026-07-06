@@ -356,9 +356,7 @@ export function buildSepaTransferMessage(data: SepaTransferData): string {
 		agent('CdtrAgt', data.creditorBic, isV09) +
 		`<Cdtr><Nm>${xmlEscape(data.creditorName)}</Nm></Cdtr>` +
 		`<CdtrAcct><Id><IBAN>${xmlEscape(data.creditorIban)}</IBAN></Id></CdtrAcct>` +
-		(data.purpose
-			? `<RmtInf><Ustrd>${xmlEscape(data.purpose)}</Ustrd></RmtInf>`
-			: '') +
+		(data.purpose ? `<RmtInf><Ustrd>${xmlEscape(data.purpose)}</Ustrd></RmtInf>` : '') +
 		`</CdtTrfTxInf>` +
 		`</PmtInf>` +
 		`</CstmrCdtTrfInitn>` +

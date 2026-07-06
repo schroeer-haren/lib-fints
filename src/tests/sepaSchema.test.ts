@@ -28,12 +28,7 @@ function validate(xml: string, schema: string): { ok: boolean; output: string } 
 	const dir = mkdtempSync(join(tmpdir(), 'sepa-xsd-'));
 	const file = join(dir, 'msg.xml');
 	writeFileSync(file, xml);
-	const res = spawnSync('xmllint', [
-		'--noout',
-		'--schema',
-		join(SCHEMA_DIR, schema),
-		file,
-	]);
+	const res = spawnSync('xmllint', ['--noout', '--schema', join(SCHEMA_DIR, schema), file]);
 	return {
 		ok: res.status === 0,
 		output: `${res.stdout ?? ''}${res.stderr ?? ''}`,
@@ -81,8 +76,20 @@ describe.skipIf(!hasXmllint())('SEPA pain messages validate against ISO XSDs', (
 			debtorBic: 'BYLADEM1001',
 			singleBooking: true,
 			payments: [
-				{ creditorName: 'Max Müller', creditorIban: 'DE02100500000054540402', creditorBic: 'BELADEBEXXX', amount: 10, purpose: 'A', endToEndId: 'E1' },
-				{ creditorName: 'Erika Öl', creditorIban: 'DE02300209000106531065', amount: 5.5, endToEndId: 'E2' },
+				{
+					creditorName: 'Max Müller',
+					creditorIban: 'DE02100500000054540402',
+					creditorBic: 'BELADEBEXXX',
+					amount: 10,
+					purpose: 'A',
+					endToEndId: 'E1',
+				},
+				{
+					creditorName: 'Erika Öl',
+					creditorIban: 'DE02300209000106531065',
+					amount: 5.5,
+					endToEndId: 'E2',
+				},
 			],
 		});
 		const r = validate(xml, 'pain.001.001.09.xsd');
@@ -101,7 +108,16 @@ describe.skipIf(!hasXmllint())('SEPA pain messages validate against ISO XSDs', (
 			requestedCollectionDate: '2026-07-15',
 			singleBooking: true,
 			payments: [
-				{ debtorName: 'Max Mustermann', debtorIban: 'DE02100500000054540402', debtorBic: 'BELADEBEXXX', amount: 49.99, purpose: 'Rechnung', endToEndId: 'E1', mandateId: 'M-1', mandateSignatureDate: '2026-06-01' },
+				{
+					debtorName: 'Max Mustermann',
+					debtorIban: 'DE02100500000054540402',
+					debtorBic: 'BELADEBEXXX',
+					amount: 49.99,
+					purpose: 'Rechnung',
+					endToEndId: 'E1',
+					mandateId: 'M-1',
+					mandateSignatureDate: '2026-06-01',
+				},
 			],
 		});
 		const r = validate(xml, 'pain.008.001.02.xsd');
@@ -120,8 +136,24 @@ describe.skipIf(!hasXmllint())('SEPA pain messages validate against ISO XSDs', (
 			requestedCollectionDate: '2026-07-15',
 			singleBooking: false,
 			payments: [
-				{ debtorName: 'Max Mustermann', debtorIban: 'DE02100500000054540402', debtorBic: 'BELADEBEXXX', amount: 49.99, purpose: 'Rechnung', endToEndId: 'E1', mandateId: 'M-1', mandateSignatureDate: '2026-06-01' },
-				{ debtorName: 'Erika Öl', debtorIban: 'DE02300209000106531065', amount: 5, endToEndId: 'E2', mandateId: 'M-2', mandateSignatureDate: '2025-01-01' },
+				{
+					debtorName: 'Max Mustermann',
+					debtorIban: 'DE02100500000054540402',
+					debtorBic: 'BELADEBEXXX',
+					amount: 49.99,
+					purpose: 'Rechnung',
+					endToEndId: 'E1',
+					mandateId: 'M-1',
+					mandateSignatureDate: '2026-06-01',
+				},
+				{
+					debtorName: 'Erika Öl',
+					debtorIban: 'DE02300209000106531065',
+					amount: 5,
+					endToEndId: 'E2',
+					mandateId: 'M-2',
+					mandateSignatureDate: '2025-01-01',
+				},
 			],
 		});
 		const r = validate(xml, 'pain.008.001.08.xsd');

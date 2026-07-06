@@ -1,5 +1,7 @@
 # Lib-FinTS
 
+> This is a fork. The original project is available at [robocode13/lib-fints](https://github.com/robocode13/lib-fints).
+
 A Typescript/Javascript client library for Online-Banking via the FinTS 3.0 protocol with PIN/TAN, supporting PSD2 and decoupled TAN methods.
 
 ## Getting Started

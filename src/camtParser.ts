@@ -539,12 +539,8 @@ export class CamtParser {
 				const mnd = this.getValueFromPath(txDtls, 'Refs.MndtId') || '';
 				const rmt = this.getValueFromPath(txDtls, 'RmtInf.Ustrd') || '';
 				const partyPath = subDebit ? 'RltdPties.Cdtr' : 'RltdPties.Dbtr';
-				const acctPath = subDebit
-					? 'RltdPties.CdtrAcct.Id.IBAN'
-					: 'RltdPties.DbtrAcct.Id.IBAN';
-				const agtPath = subDebit
-					? 'RltdAgts.CdtrAgt.FinInstnId'
-					: 'RltdAgts.DbtrAgt.FinInstnId';
+				const acctPath = subDebit ? 'RltdPties.CdtrAcct.Id.IBAN' : 'RltdPties.DbtrAcct.Id.IBAN';
+				const agtPath = subDebit ? 'RltdAgts.CdtrAgt.FinInstnId' : 'RltdAgts.DbtrAgt.FinInstnId';
 				let sbk = this.parseBankTransactionCode(txDtls);
 				if (!sbk.domainCode && !sbk.familyCode && !sbk.subFamilyCode) {
 					sbk = this.parseBankTransactionCode(entry);

@@ -1,10 +1,9 @@
 import type { FinTSConfig } from '../config.js';
-import type { Message } from '../message.js';
 import type { Money } from '../dataGroups/Money.js';
 import type { Segment } from '../segment.js';
-import { HKDSE, type HKDSESegment } from '../segments/HKDSE.js';
 import { HKDME, type HKDMESegment } from '../segments/HKDME.js';
-import { type ClientResponse, CustomerOrderInteraction } from './customerInteraction.js';
+import { HKDSE, type HKDSESegment } from '../segments/HKDSE.js';
+import { CustomerOrderInteraction } from './customerInteraction.js';
 
 export type DirectDebitParams = {
 	accountNumber: string;
