@@ -20,9 +20,11 @@
 		}
 	},
 	"scripts": {
-		"build": "rm -rf ./dist && tsc",
-		"pack": "pnpm run build && pnpm pack --pack-destination ~/npm-repo",
-		"test": "vitest",
+		"clean": "tsc --build --clean",
+		"prebuild": "npm run clean",
+		"build": "tsc --build",
+		"test": "vitest run",
+		"test:watch": "vitest",
 		"prepare": "npm run build"
 	},
 	"keywords": [
@@ -32,11 +34,11 @@
 		"Home Banking",
 		"PIN/TAN"
 	],
-	"author": "Robert Weber <robocode@outlook.com>",
+	"author": "Philipp Schröer",
 	"license": "LGPL-2.1-or-later",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/robocode13/lib-fints.git"
+		"url": "git+https://github.com/schroeer-haren/lib-fints.git"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.10",
@@ -46,5 +48,6 @@
 	},
 	"dependencies": {
 		"fast-xml-parser": "^5.8.0"
-	}
+	},
+	"packageManager": "npm@11.12.1"
 }

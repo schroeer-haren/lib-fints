@@ -10,70 +10,34 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  ci-and-publish:
+  ci:
     runs-on: ubuntu-latest
 
     strategy:
       matrix:
         node-version: [18.x, 20.x, 22.x]
-        include:
-          - node-version: 22.x
-            publish: true
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           registry-url: 'https://registry.npmjs.org'
-          cache: 'pnpm'
+          cache: 'npm'
 
-      - name: Install dependencies with pnpm
-        run: pnpm install --frozen-lockfile
+      - name: Install dependencies
+        run: npm ci
 
       - name: Run build (TypeScript compilation)
-        run: pnpm run build
+        run: npm run build
 
       - name: Run Biome (linter and formatter)
-        run: pnpm exec biome ci
+        run: npx biome ci
 
       - name: Run tests (Vitest)
-        run: pnpm run test -- --run
-
-      - name: Check whether package version is already published
-        id: npm-package-version
-        if: matrix.publish && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: bash
-        run: |
-          package_name=$(node -p "require('./package.json').name")
-          package_version=$(node -p "require('./package.json').version")
-
-          if npm view "${package_name}@${package_version}" version --registry https://registry.npmjs.org >/dev/null 2>npm-view-error.log; then
-            echo "${package_name}@${package_version} is already published. Skipping publish."
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-          elif grep -q "E404" npm-view-error.log; then
-            echo "${package_name}@${package_version} is not published yet. Publishing."
-            echo "should_publish=true" >> "$GITHUB_OUTPUT"
-          else
-            cat npm-view-error.log >&2
-            exit 1
-          fi
-
-      - name: Install npm 11
-        if: steps.npm-package-version.outputs.should_publish == 'true'
-        run: npm install -g npm@11
-
-      - name: Publish to NPM
-        if: steps.npm-package-version.outputs.should_publish == 'true'
-        run: npm publish
+        run: npm test

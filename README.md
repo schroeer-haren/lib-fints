@@ -1,5 +1,3 @@
-[![Node.js CI with pnpm](https://github.com/robocode13/lib-fints/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/robocode13/lib-fints/actions/workflows/ci.yml)
-
 # Lib-FinTS
 
 A Typescript/Javascript client library for Online-Banking via the FinTS 3.0 protocol with PIN/TAN, supporting PSD2 and decoupled TAN methods.
@@ -287,7 +285,7 @@ Implementing further transactions should be straight forward and contributions a
 - [Typescript](https://www.typescriptlang.org/) - Programming Language
 - [fast-xml-parser](https://github.com/NaturalIntelligence/fast-xml-parser) - XML parsing for CAMT statements
 - [Vitest](https://vitest.dev/) - Testing Framework
-- [pnpm](https://pnpm.io/) - Package manager
+- [npm](https://www.npmjs.com/) - Package manager
 
 ## Contributing
 

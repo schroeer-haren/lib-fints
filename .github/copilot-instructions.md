@@ -69,7 +69,7 @@ elements = [
 - Use Vitest with mock patterns for `Dialog.prototype` methods
 - Mock external HTTP communication, not internal protocol logic
 - Test files follow `*.test.ts` naming in `src/tests/`
-- Run tests: `pnpm test --run`
+- Run tests: `npm test`
 
 ### Error Handling
 
@@ -104,7 +104,7 @@ Check capability with `can*()` methods (e.g., `canGetAccountBalance()`). Not all
 ## Development Commands
 
 - **Build**: TypeScript compilation to ES2022
-- **Test**: `pnpm test` (Vitest)
+- **Test**: `npm test` (Vitest)
 - **Dependencies**: Zero runtime dependencies - self-contained protocol implementation
 
 ## Important Constraints
