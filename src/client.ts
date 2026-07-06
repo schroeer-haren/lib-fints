@@ -262,6 +262,8 @@ export class FinTSClient {
 		instant?: boolean;
 		// N = one collective (Sammel) booking, J = each payment booked individually.
 		singleBooking?: boolean;
+		// Experimental: one <PmtInf> per payment (see buildSepaCollectiveTransferMessage).
+		separatePmtInf?: boolean;
 		// When set, this is the approval step (HKVPA) after the user confirmed VoP.
 		vopId?: string;
 		// The exact pain.001 from the initial step, re-sent verbatim on approval.
@@ -286,6 +288,7 @@ export class FinTSClient {
 				debtorBic: account.bic,
 				payments: input.payments,
 				singleBooking,
+				separatePmtInf: input.separatePmtInf,
 			});
 		// Only request VoP when the bank actually advertises it (HIVPPS); otherwise
 		// submit the batch on its own.

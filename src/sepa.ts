@@ -96,6 +96,11 @@ export type SepaCollectiveData = {
 	payments: SepaPayment[];
 	// N = one collective (Sammel) booking, J = each payment booked individually.
 	singleBooking: boolean;
+	// Experimental: emit one <PmtInf> block per payment (instead of one block with
+	// all). Booking granularity is per PmtInf, so this can yield individual
+	// bookings even when the bank ignores BtchBookg — bank-dependent. Only sensible
+	// together with singleBooking (Einzelbuchung).
+	separatePmtInf?: boolean;
 };
 
 // The batch total, rounded to cents, as a number (for the FinTS Summenfeld).
@@ -117,7 +122,6 @@ export function buildSepaCollectiveTransferMessage(data: SepaCollectiveData): st
 	const now = new Date();
 	const creDtTm = now.toISOString().slice(0, 19);
 	const msgId = makeId('M');
-	const pmtInfId = makeId('P');
 	const nbOfTxs = data.payments.length;
 	const ctrlSum = formatAmount(collectiveSum(data.payments));
 	const reqdExctnDt = isV09
@@ -126,7 +130,33 @@ export function buildSepaCollectiveTransferMessage(data: SepaCollectiveData): st
 	const dbtrAgt = data.debtorBic
 		? agent('DbtrAgt', data.debtorBic, isV09)
 		: `<DbtrAgt><FinInstnId><Othr><Id>NOTPROVIDED</Id></Othr></FinInstnId></DbtrAgt>`;
-	const txs = data.payments.map((p) => creditTransferTx(p, currency, isV09)).join('');
+
+	// One <PmtInf> block for the given payments. Booking granularity at the bank
+	// is per PmtInf — so putting one payment per block (separatePmtInf) is a way
+	// to nudge the bank into individual bookings even without honouring BtchBookg.
+	const pmtInfBlock = (payments: SepaPayment[]): string => {
+		const blockTxs = payments.map((p) => creditTransferTx(p, currency, isV09)).join('');
+		return (
+			`<PmtInf>` +
+			`<PmtInfId>${makeId('P')}</PmtInfId>` +
+			`<PmtMtd>TRF</PmtMtd>` +
+			`<BtchBookg>${data.singleBooking ? 'false' : 'true'}</BtchBookg>` +
+			`<NbOfTxs>${payments.length}</NbOfTxs>` +
+			`<CtrlSum>${formatAmount(collectiveSum(payments))}</CtrlSum>` +
+			`<PmtTpInf><SvcLvl><Cd>SEPA</Cd></SvcLvl></PmtTpInf>` +
+			reqdExctnDt +
+			`<Dbtr><Nm>${xmlEscape(data.debtorName)}</Nm></Dbtr>` +
+			`<DbtrAcct><Id><IBAN>${xmlEscape(data.debtorIban)}</IBAN></Id></DbtrAcct>` +
+			dbtrAgt +
+			`<ChrgBr>SLEV</ChrgBr>` +
+			blockTxs +
+			`</PmtInf>`
+		);
+	};
+
+	const pmtInfBlocks = data.separatePmtInf
+		? data.payments.map((p) => pmtInfBlock([p])).join('')
+		: pmtInfBlock(data.payments);
 
 	return (
 		`<?xml version="1.0" encoding="UTF-8"?>` +
@@ -139,20 +169,7 @@ export function buildSepaCollectiveTransferMessage(data: SepaCollectiveData): st
 		`<CtrlSum>${ctrlSum}</CtrlSum>` +
 		`<InitgPty><Nm>${xmlEscape(data.debtorName)}</Nm></InitgPty>` +
 		`</GrpHdr>` +
-		`<PmtInf>` +
-		`<PmtInfId>${pmtInfId}</PmtInfId>` +
-		`<PmtMtd>TRF</PmtMtd>` +
-		`<BtchBookg>${data.singleBooking ? 'false' : 'true'}</BtchBookg>` +
-		`<NbOfTxs>${nbOfTxs}</NbOfTxs>` +
-		`<CtrlSum>${ctrlSum}</CtrlSum>` +
-		`<PmtTpInf><SvcLvl><Cd>SEPA</Cd></SvcLvl></PmtTpInf>` +
-		reqdExctnDt +
-		`<Dbtr><Nm>${xmlEscape(data.debtorName)}</Nm></Dbtr>` +
-		`<DbtrAcct><Id><IBAN>${xmlEscape(data.debtorIban)}</IBAN></Id></DbtrAcct>` +
-		dbtrAgt +
-		`<ChrgBr>SLEV</ChrgBr>` +
-		txs +
-		`</PmtInf>` +
+		pmtInfBlocks +
 		`</CstmrCdtTrfInitn>` +
 		`</Document>`
 	);
