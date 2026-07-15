@@ -54,6 +54,7 @@ import {
 	type SepaPayment,
 	type SepaSequenceType,
 } from './sepa.js';
+import { countDirectDebitTx, parsePain008Namespace, sumInstructedAmount } from './sepaXml.js';
 import type { TanMethod } from './tanMethod.js';
 
 export interface SynchronizeResponse extends InitResponse {}
@@ -412,6 +413,65 @@ export class FinTSClient {
 	 * required a TAN.
 	 */
 	async sepaDirectDebitWithTan(tanReference: string, tan?: string): Promise<ClientResponse> {
+		return await this.continueCustomerInteractionWithTan([HKDSE.Id, HKDME.Id], tanReference, tan);
+	}
+
+	/**
+	 * Submits an already-built pain.008 (SEPA direct debit) verbatim — the caller
+	 * provides the exact XML that was generated and reviewed elsewhere. The pain
+	 * descriptor is derived from the XML's own namespace and validated against the
+	 * bank's advertised formats. One transaction → HKDSE, several → HKDME.
+	 */
+	async submitSepaDirectDebitXml(input: {
+		accountNumber: string;
+		painMessage: string;
+		singleBooking?: boolean;
+	}): Promise<ClientResponse> {
+		const version = parsePain008Namespace(input.painMessage); // e.g. pain.008.001.02
+		const supported = this.getSupportedSepaFormats();
+		const painDescriptor = supported.find((f) => f.includes(version));
+		if (!painDescriptor) {
+			throw new Error(
+				`Bank does not support ${version}; advertised: ${supported.join(', ') || 'none'}.`,
+			);
+		}
+		const count = countDirectDebitTx(input.painMessage);
+		if (count === 0) throw new Error('The pain.008 contains no direct-debit transactions.');
+		const account = this.config.getBankAccount(input.accountNumber);
+		if (!account.iban) {
+			throw Error(`Account ${input.accountNumber} has no IBAN; cannot collect.`);
+		}
+		const singleBooking = input.singleBooking ?? true;
+
+		if (count > 1) {
+			const { value, currency } = sumInstructedAmount(input.painMessage);
+			return await this.startCustomerOrderInteraction(
+				new CollectiveDirectDebitInteraction({
+					accountNumber: input.accountNumber,
+					painMessage: input.painMessage,
+					painDescriptor,
+					sumAmount: { value, currency },
+					requestSingleBooking: singleBooking,
+				}),
+			);
+		}
+		return await this.startCustomerOrderInteraction(
+			new DirectDebitInteraction({
+				accountNumber: input.accountNumber,
+				painMessage: input.painMessage,
+				painDescriptor,
+			}),
+		);
+	}
+
+	/**
+	 * Continues a submitSepaDirectDebitXml order (single HKDSE or collective
+	 * HKDME) that required a TAN.
+	 */
+	async submitSepaDirectDebitXmlWithTan(
+		tanReference: string,
+		tan?: string,
+	): Promise<ClientResponse> {
 		return await this.continueCustomerInteractionWithTan([HKDSE.Id, HKDME.Id], tanReference, tan);
 	}
 
