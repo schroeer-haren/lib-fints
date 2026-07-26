@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { countDirectDebitTx, parsePain008Namespace, sumInstructedAmount } from './sepaXml.js';
+import {
+	countDirectDebitTx,
+	parsePain001Namespace,
+	parsePain008Namespace,
+	sumInstructedAmount,
+} from './sepaXml.js';
 
 const XML_02 = `<?xml version="1.0" encoding="UTF-8"?>
 <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.008.001.02">
@@ -44,6 +49,21 @@ const XML_FLOAT_DRIFT = `<?xml version="1.0" encoding="UTF-8"?>
   <DrctDbtTxInf><InstdAmt Ccy="EUR">20.20</InstdAmt></DrctDbtTxInf>
  </PmtInf></CstmrDrctDbtInitn></Document>`;
 
+// Deliberately without any xmlns — note that XML_NO_NAMESPACE above means "no
+// pain.008 namespace" and in fact carries a pain.001 one, so it is not usable
+// as a negative case for the credit-transfer parser.
+const XML_WITHOUT_XMLNS = `<?xml version="1.0" encoding="UTF-8"?>
+<Document>
+ <CstmrCdtTrfInitn><PmtInf>
+  <CdtTrfTxInf><Amt><InstdAmt Ccy="EUR">42.00</InstdAmt></Amt></CdtTrfTxInf>
+ </PmtInf></CstmrCdtTrfInitn></Document>`;
+
+const XML_CREDIT_TRANSFER_09 = `<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.001.001.09">
+ <CstmrCdtTrfInitn><PmtInf>
+  <CdtTrfTxInf><Amt><InstdAmt Ccy="EUR">42.00</InstdAmt></Amt></CdtTrfTxInf>
+ </PmtInf></CstmrCdtTrfInitn></Document>`;
+
 describe('sepaXml', () => {
 	it('reads the pain namespace version', () => {
 		expect(parsePain008Namespace(XML_02)).toBe('pain.008.001.02');
@@ -59,6 +79,16 @@ describe('sepaXml', () => {
 	});
 	it('throws when the pain.008 namespace is missing', () => {
 		expect(() => parsePain008Namespace(XML_NO_NAMESPACE)).toThrow(/Kein pain.008-Namespace/);
+	});
+	it('reads the pain.001 namespace version', () => {
+		expect(parsePain001Namespace(XML_CREDIT_TRANSFER_09)).toBe('pain.001.001.09');
+	});
+	it('throws when the pain.001 namespace is missing', () => {
+		expect(() => parsePain001Namespace(XML_WITHOUT_XMLNS)).toThrow(/Kein pain.001-Namespace/);
+	});
+	it('does not accept a pain.008 document as a credit transfer', () => {
+		// Guards against a copy/paste mix-up between the two submit paths.
+		expect(() => parsePain001Namespace(XML_02)).toThrow(/Kein pain.001-Namespace/);
 	});
 	it('aggregates transactions across multiple sibling PmtInf blocks', () => {
 		expect(countDirectDebitTx(XML_MULTI_PMTINF)).toBe(5);

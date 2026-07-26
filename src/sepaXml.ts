@@ -6,6 +6,15 @@ function parseDoc(xml: string): Record<string, unknown> {
 	return parser.parse(xml) as Record<string, unknown>;
 }
 
+/** Extract e.g. "pain.001.001.09" from the <Document> xmlns URN. */
+export function parsePain001Namespace(xml: string): string {
+	const doc = parseDoc(xml) as { Document?: { '@_xmlns'?: string } };
+	const ns = doc.Document?.['@_xmlns'] ?? '';
+	const m = ns.match(/pain\.001\.001\.\d{2}/);
+	if (!m) throw new Error(`Kein pain.001-Namespace in der XML gefunden (xmlns="${ns}").`);
+	return m[0];
+}
+
 /** Extract e.g. "pain.008.001.02" from the <Document> xmlns URN. */
 export function parsePain008Namespace(xml: string): string {
 	const doc = parseDoc(xml) as { Document?: { '@_xmlns'?: string } };
