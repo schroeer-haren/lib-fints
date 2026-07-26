@@ -54,7 +54,12 @@ import {
 	type SepaPayment,
 	type SepaSequenceType,
 } from './sepa.js';
-import { countDirectDebitTx, parsePain008Namespace, sumInstructedAmount } from './sepaXml.js';
+import {
+	countDirectDebitTx,
+	parsePain001Namespace,
+	parsePain008Namespace,
+	sumInstructedAmount,
+} from './sepaXml.js';
 import type { TanMethod } from './tanMethod.js';
 
 export interface SynchronizeResponse extends InitResponse {}
@@ -145,6 +150,34 @@ export class FinTSClient {
 	}
 
 	/**
+	 * The pain descriptor to announce alongside a credit-transfer order.
+	 *
+	 * When the caller supplies its own pain.001, that document's namespace is
+	 * the only truth: announcing a different version makes the bank's parser
+	 * reject the whole message ("9010 Fehler beim Aufruf Parser") without ever
+	 * issuing a challenge. The version is validated against the bank's
+	 * advertised formats so the caller gets a diagnosable error instead.
+	 *
+	 * Only when no message is supplied — i.e. this class builds it below — may
+	 * we pick freely, because the picked descriptor is then what gets built.
+	 *
+	 * Mirrors submitSepaDirectDebitXml, which has always derived the descriptor
+	 * from the pain.008 it is handed.
+	 */
+	private resolveTransferDescriptor(painMessage?: string): string {
+		if (!painMessage) return pickSepaDescriptor(this.getSupportedSepaFormats());
+		const version = parsePain001Namespace(painMessage);
+		const supported = this.getSupportedSepaFormats();
+		const painDescriptor = supported.find((f) => f.includes(version));
+		if (!painDescriptor) {
+			throw new Error(
+				`Bank does not support ${version}; advertised: ${supported.join(', ') || 'none'}.`,
+			);
+		}
+		return painDescriptor;
+	}
+
+	/**
 	 * Initiates a SEPA single credit transfer from the given account. Requires
 	 * strong authentication: returns requiresTan and is continued via
 	 * sepaTransferWithTan.
@@ -169,7 +202,7 @@ export class FinTSClient {
 		if (!account.iban) {
 			throw Error(`Account ${input.accountNumber} has no IBAN; cannot transfer.`);
 		}
-		const painDescriptor = pickSepaDescriptor(this.getSupportedSepaFormats());
+		const painDescriptor = this.resolveTransferDescriptor(input.painMessage);
 		const painMessage =
 			input.painMessage ??
 			buildSepaTransferMessage({
@@ -268,7 +301,7 @@ export class FinTSClient {
 			throw Error(`Account ${input.accountNumber} has no IBAN; cannot transfer.`);
 		}
 		const singleBooking = input.singleBooking ?? true;
-		const painDescriptor = pickSepaDescriptor(this.getSupportedSepaFormats());
+		const painDescriptor = this.resolveTransferDescriptor(input.painMessage);
 		const painMessage =
 			input.painMessage ??
 			buildSepaCollectiveTransferMessage({
