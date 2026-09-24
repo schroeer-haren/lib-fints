@@ -87,6 +87,31 @@ type SepaPayment = {
 };
 ```
 
+### Submitting a ready pain.001
+
+If the pain.001 is generated elsewhere (e.g. by your own SEPA builder and kept as the
+reviewed document), pass it as `painMessage` instead of `payments`. It is sent verbatim:
+
+```typescript
+let response = await client.sepaCollectiveTransfer({
+  accountNumber,
+  painMessage: pain001Xml, // pain.001.001.03 or .09
+});
+```
+
+- The pain descriptor announced to the bank is taken from the document's namespace and
+  must be one the bank advertises.
+- The control sum on the FinTS segment (HKCCM/HKIPM "Summenfeld") is computed from the
+  document's `<InstdAmt>` values across all `<PmtInf>` blocks, in cents. The document is
+  rejected (before any dialog is opened) if it contains no transactions, an invalid
+  amount, mixed currencies, or a group header `NbOfTxs`/`CtrlSum` that contradicts its
+  transactions.
+- `debtorName` and `payments` are optional in this mode. If you still pass `payments`,
+  their count and sum must match the document; otherwise the call is rejected, because
+  the bank would receive a Summenfeld that contradicts the order.
+- The bank accepts only **one** `<PmtInf>` per collective order; the library does not
+  enforce that for a caller-supplied document.
+
 ## SEPA direct debit ("Lastschrift")
 
 Collect money from one or more debtors. With more than one payment the library automatically uses the collective segment (HKDME) instead of the single one (HKDSE).

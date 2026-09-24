@@ -19,5 +19,6 @@ export * from './message.js';
 export * from './mt535parser.js';
 export * from './mt940parser.js';
 export * from './segment.js';
+export { type CreditTransferTotals, creditTransferTotals } from './sepaXml.js';
 export * from './statement.js';
 export * from './upd.js';
