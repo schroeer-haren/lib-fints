@@ -87,6 +87,45 @@ type SepaPayment = {
 };
 ```
 
+### Submitting a ready pain.001
+
+If the pain.001 is generated elsewhere (e.g. by your own SEPA builder and kept as the
+reviewed document), pass it as `painMessage` instead of `payments`. It is sent verbatim:
+
+```typescript
+let response = await client.sepaCollectiveTransfer({
+  accountNumber,
+  painMessage: pain001Xml, // pain.001.001.03 or .09
+});
+```
+
+- The pain descriptor announced to the bank is taken from the document's namespace and
+  must be one the bank advertises. Default (`<Document xmlns="…">`) and prefixed
+  (`<p:Document xmlns:p="…">`) namespaces are both accepted.
+- The control sum on the FinTS segment (HKCCM/HKIPM "Summenfeld") is computed from the
+  document's `<InstdAmt>` values across all `<PmtInf>` blocks, in exact cents. The same
+  numbers are available to you via the exported `creditTransferTotals(xml)`.
+- The document is validated against the formats of the DK "Spezifikation der
+  Datenformate" (DFÜ-Abkommen Anlage 3, V 3.5, Teil 2) and rejected before any dialog is
+  opened if:
+  - it is empty, not a pain.001, or contains no `<CdtTrfTxInf>`;
+  - an amount is not a plain decimal with a point and at most two decimals between
+    `0.01` and `999999999.99` (`5`, `5.5` and `5.50` are fine; `1e3`, `+5`, `007.50`,
+    `5.`, `.5`, `1,50` are not), uses `EqvtAmt`, or is not `Ccy="EUR"` exactly;
+  - a `NbOfTxs` / `CtrlSum` in the group header **or in a `<PmtInf>`** is malformed
+    (`NbOfTxs`: positive integer without leading zeros; `CtrlSum`: at most two decimals)
+    or contradicts the transactions it describes. Both are mandatory per the spec but are
+    only checked when present;
+  - `<PmtInf>` blocks disagree about `BtchBookg`.
+- `debtorName` and `payments` are optional in this mode. If you still pass `payments`,
+  their count and sum must match the document; otherwise the call is rejected, because
+  the bank would receive a Summenfeld that contradicts the order.
+- `singleBooking` defaults to the document's `BtchBookg` (`true` → `singleBooking: false`,
+  i.e. one collective booking). An explicit `singleBooking` that contradicts it is
+  rejected. Without a `BtchBookg` element the default stays `true`, as before.
+- The bank accepts only **one** `<PmtInf>` per collective order; the library does not
+  enforce that for a caller-supplied document.
+
 ## SEPA direct debit ("Lastschrift")
 
 Collect money from one or more debtors. With more than one payment the library automatically uses the collective segment (HKDME) instead of the single one (HKDSE).

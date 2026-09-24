@@ -56,6 +56,7 @@ import {
 } from './sepa.js';
 import {
 	countDirectDebitTx,
+	creditTransferTotals,
 	parsePain001Namespace,
 	parsePain008Namespace,
 	sumInstructedAmount,
@@ -63,6 +64,86 @@ import {
 import type { TanMethod } from './tanMethod.js';
 
 export interface SynchronizeResponse extends InitResponse {}
+
+type SepaCollectiveTransferBase = {
+	accountNumber: string;
+	instant?: boolean;
+	// N = one collective (Sammel) booking, J = each payment booked individually.
+	// Announced on the FinTS segment and, when the pain.001 is built here, written
+	// into its BtchBookg (default true). With a caller-supplied painMessage the
+	// default follows the document's BtchBookg, and a contradicting value is
+	// rejected.
+	singleBooking?: boolean;
+	// When set, this is the approval step (HKVPA) after the user confirmed VoP.
+	vopId?: string;
+};
+
+/**
+ * Input of FinTSClient.sepaCollectiveTransfer: either `payments` (the pain.001
+ * is built by the library, `debtorName` required) or a ready `painMessage`
+ * (sent verbatim; control sum and count are read from it, `payments` optional
+ * and — when given — checked against the message).
+ */
+export type SepaCollectiveTransferInput = SepaCollectiveTransferBase &
+	(
+		| {
+				debtorName: string;
+				payments: SepaPayment[];
+				// The exact pain.001 from the initial step, re-sent verbatim on approval.
+				painMessage?: string;
+		  }
+		| {
+				debtorName?: string;
+				payments?: SepaPayment[];
+				// A ready pain.001 (.03 or .09) sent verbatim. Its namespace selects the
+				// pain descriptor, its transactions the Summenfeld of the order.
+				painMessage: string;
+		  }
+	);
+
+/**
+ * Rejects `payments` that disagree with the pain.001 about to be sent. The bank
+ * receives the message, so its totals are authoritative; a caller whose payments
+ * say otherwise has handed in the wrong document (or the wrong list).
+ */
+function assertPaymentsMatchMessage(
+	payments: SepaPayment[],
+	totals: { count: number; value: number },
+): void {
+	const sum = collectiveSum(payments);
+	if (
+		payments.length !== totals.count ||
+		Math.round(sum * 100) !== Math.round(totals.value * 100)
+	) {
+		throw Error(
+			`The payments (${payments.length}, ${sum.toFixed(2)}) do not match the painMessage ` +
+				`(${totals.count}, ${totals.value.toFixed(2)}); refusing to announce a sum that ` +
+				'contradicts the order.',
+		);
+	}
+}
+
+/**
+ * The "Einzelbuchung gewünscht" flag for a caller-supplied pain.001. The FinTS
+ * flag and the document's BtchBookg describe the same thing (BtchBookg=true is
+ * one collective booking, i.e. singleBooking=false), so the document decides
+ * the default and an explicit flag that contradicts it is rejected. Without a
+ * BtchBookg in the document the library's historical default (true) stands.
+ */
+function resolveSingleBooking(
+	requested: boolean | undefined,
+	batchBooking: boolean | undefined,
+): boolean {
+	if (batchBooking === undefined) return requested ?? true;
+	const fromDocument = !batchBooking;
+	if (requested !== undefined && requested !== fromDocument) {
+		throw Error(
+			`singleBooking=${requested} contradicts the painMessage's BtchBookg=${batchBooking}; ` +
+				`omit singleBooking or pass ${fromDocument}.`,
+		);
+	}
+	return fromDocument;
+}
 
 /**
  * A client to communicate with a bank over the FinTS protocol
@@ -279,39 +360,58 @@ export class FinTSClient {
 	 * Payee, an HKVPP name check is sent with the batch and the (possibly async)
 	 * result is returned in response.vop; the approval is then re-sent with vopId.
 	 * Continued via sepaCollectiveTransferWithTan.
+	 *
+	 * Pass either `payments` (the pain.001 is built here) or a ready `painMessage`
+	 * (sent verbatim). With a message, the control sum announced on the FinTS
+	 * segment is read from that message — the document the bank actually
+	 * receives — so `payments` and `debtorName` are then optional. If `payments`
+	 * are given as well they must match the message (count and sum); a mismatch
+	 * is rejected before any dialog is opened, because the bank would otherwise
+	 * receive a Summenfeld that contradicts the order. Likewise `singleBooking`
+	 * defaults to the message's BtchBookg and must not contradict it.
 	 */
-	async sepaCollectiveTransfer(input: {
-		accountNumber: string;
-		debtorName: string;
-		payments: SepaPayment[];
-		instant?: boolean;
-		// N = one collective (Sammel) booking, J = each payment booked individually.
-		singleBooking?: boolean;
-		// When set, this is the approval step (HKVPA) after the user confirmed VoP.
-		vopId?: string;
-		// The exact pain.001 from the initial step, re-sent verbatim on approval.
-		painMessage?: string;
-	}): Promise<TransferResponse> {
+	async sepaCollectiveTransfer(input: SepaCollectiveTransferInput): Promise<TransferResponse> {
 		const instant = input.instant ?? false;
-		if (input.payments.length === 0) {
-			throw Error('A collective transfer needs at least one payment.');
+		if (input.painMessage !== undefined && input.painMessage.trim() === '') {
+			throw Error('painMessage is empty; pass a pain.001 document or omit it and pass payments.');
+		}
+		if (!input.painMessage) {
+			if (!input.payments || input.payments.length === 0) {
+				throw Error('A collective transfer needs at least one payment.');
+			}
+			if (input.debtorName === undefined) {
+				throw Error('A collective transfer without painMessage needs a debtorName.');
+			}
 		}
 		const account = this.config.getBankAccount(input.accountNumber);
 		if (!account.iban) {
 			throw Error(`Account ${input.accountNumber} has no IBAN; cannot transfer.`);
 		}
-		const singleBooking = input.singleBooking ?? true;
 		const painDescriptor = this.resolveTransferDescriptor(input.painMessage);
-		const painMessage =
-			input.painMessage ??
-			buildSepaCollectiveTransferMessage({
+		let painMessage: string;
+		let sumAmount: { value: number; currency: string };
+		let singleBooking: boolean;
+		if (input.painMessage) {
+			painMessage = input.painMessage;
+			const totals = creditTransferTotals(painMessage);
+			if (input.payments) assertPaymentsMatchMessage(input.payments, totals);
+			sumAmount = { value: totals.value, currency: totals.currency };
+			singleBooking = resolveSingleBooking(input.singleBooking, totals.batchBooking);
+		} else {
+			singleBooking = input.singleBooking ?? true;
+			// Presence of both was checked above; the union type cannot narrow on a
+			// falsy painMessage, hence the fallbacks.
+			const payments = input.payments ?? [];
+			painMessage = buildSepaCollectiveTransferMessage({
 				painDescriptor,
-				debtorName: input.debtorName,
+				debtorName: input.debtorName ?? '',
 				debtorIban: account.iban,
 				debtorBic: account.bic,
-				payments: input.payments,
+				payments,
 				singleBooking,
 			});
+			sumAmount = { value: collectiveSum(payments), currency: 'EUR' };
+		}
 		// Only request VoP when the bank actually advertises it (HIVPPS); otherwise
 		// submit the batch on its own.
 		const reportDescriptor = this.getVopReportFormat();
@@ -322,7 +422,7 @@ export class FinTSClient {
 				painMessage,
 				painDescriptor,
 				instant,
-				sumAmount: { value: collectiveSum(input.payments), currency: 'EUR' },
+				sumAmount,
 				requestSingleBooking: singleBooking,
 				vopReportDescriptor: reportDescriptor,
 				vopId: input.vopId,
