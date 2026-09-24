@@ -337,6 +337,93 @@ describe('FinTSClient credit transfer — pain descriptor', () => {
 			expect(dialogStartMock).not.toHaveBeenCalled();
 		});
 
+		const withBooking = (value: string) =>
+			collective(
+				'03',
+				`<PmtInf><BtchBookg>${value}</BtchBookg>${tx('1.00')}${tx('2.00')}</PmtInf>`,
+			);
+
+		it('defaults singleBooking from the message BtchBookg', async () => {
+			mockSuccess();
+			await client.sepaCollectiveTransfer({
+				accountNumber: '1234567890',
+				painMessage: withBooking('true'),
+			});
+			mockSuccess();
+			await client.sepaCollectiveTransfer({
+				accountNumber: '1234567890',
+				painMessage: withBooking('false'),
+			});
+
+			expect(addCustomerInteractionSpy.mock.calls[0][0].params.requestSingleBooking).toBe(false);
+			expect(addCustomerInteractionSpy.mock.calls[1][0].params.requestSingleBooking).toBe(true);
+		});
+
+		it('keeps the historical default and an explicit value when the message has no BtchBookg', async () => {
+			mockSuccess();
+			await client.sepaCollectiveTransfer({ accountNumber: '1234567890', painMessage: BATCH_03 });
+			mockSuccess();
+			await client.sepaCollectiveTransfer({
+				accountNumber: '1234567890',
+				painMessage: BATCH_03,
+				singleBooking: false,
+			});
+
+			expect(addCustomerInteractionSpy.mock.calls[0][0].params.requestSingleBooking).toBe(true);
+			expect(addCustomerInteractionSpy.mock.calls[1][0].params.requestSingleBooking).toBe(false);
+		});
+
+		it('accepts an explicit singleBooking that agrees with BtchBookg', async () => {
+			mockSuccess();
+			await client.sepaCollectiveTransfer({
+				accountNumber: '1234567890',
+				painMessage: withBooking('true'),
+				singleBooking: false,
+			});
+
+			expect(addCustomerInteractionSpy.mock.calls[0][0].params.requestSingleBooking).toBe(false);
+		});
+
+		it('rejects an explicit singleBooking that contradicts BtchBookg', async () => {
+			await expect(
+				client.sepaCollectiveTransfer({
+					accountNumber: '1234567890',
+					painMessage: withBooking('true'),
+					singleBooking: true,
+				}),
+			).rejects.toThrow(/singleBooking=true contradicts the painMessage's BtchBookg=true/);
+			expect(dialogStartMock).not.toHaveBeenCalled();
+		});
+
+		it('rejects an empty painMessage with its own error', async () => {
+			for (const painMessage of ['', '   ']) {
+				await expect(
+					client.sepaCollectiveTransfer({
+						accountNumber: '1234567890',
+						debtorName: 'Test User',
+						payments: [payment(1)],
+						painMessage,
+					}),
+				).rejects.toThrow(/painMessage is empty/);
+			}
+			expect(dialogStartMock).not.toHaveBeenCalled();
+		});
+
+		it('accepts a message with a prefixed namespace', async () => {
+			mockSuccess();
+			const prefixed = `<?xml version="1.0" encoding="UTF-8"?>
+<p:Document xmlns:p="urn:iso:std:iso:20022:tech:xsd:pain.001.001.03"><p:CstmrCdtTrfInitn><p:PmtInf>
+<p:CdtTrfTxInf><p:Amt><p:InstdAmt Ccy="EUR">4.20</p:InstdAmt></p:Amt></p:CdtTrfTxInf>
+</p:PmtInf></p:CstmrCdtTrfInitn></p:Document>`;
+			await client.sepaCollectiveTransfer({ accountNumber: '1234567890', painMessage: prefixed });
+
+			const submitted = addCustomerInteractionSpy.mock.calls[0][0];
+			expect(submitted.params.painDescriptor).toBe(
+				'urn:iso:std:iso:20022:tech:xsd:pain.001.001.03',
+			);
+			expect(submitted.params.sumAmount).toEqual({ value: 4.2, currency: 'EUR' });
+		});
+
 		it('still requires payments and debtorName without a message', async () => {
 			await expect(
 				client.sepaCollectiveTransfer({
