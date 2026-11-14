@@ -11,7 +11,12 @@ import type {
 } from '../interactions/customerInteraction.js';
 import { InitDialogInteraction } from '../interactions/initDialogInteraction.js';
 import { SepaAccountInteraction } from '../interactions/sepaAccountInteraction.js';
+import { StatementInteractionCAMT } from '../interactions/statementInteractionCAMT.js';
 import { Message } from '../message.js';
+import { PARTED, type PartedSegment } from '../partedSegment.js';
+import { encode } from '../segment.js';
+import { HICAZ, type HICAZSegment } from '../segments/HICAZ.js';
+import { HIRMS, type HIRMSSegment } from '../segments/HIRMS.js';
 import { registerSegments } from '../segments/registry.js';
 
 // Mock HttpClient to prevent real HTTP calls
@@ -326,6 +331,492 @@ describe('Dialog', () => {
 			expect(() => dialog.addCustomerInteraction(sepaAccountInteraction)).toThrow(
 				'customer order transaction UNSUPPORTED is not supported according to the BPD',
 			);
+		});
+	});
+
+	describe('multipart CAMT statement responses', () => {
+		function makeCompleteCamtPage(xml: string, iban: string, continuationMark?: string): Message {
+			const camtSegment: HICAZSegment = {
+				header: {
+					segId: HICAZ.Id,
+					segNr: 3,
+					version: HICAZ.Version,
+				},
+				account: { iban },
+				camtDescriptor: 'camt.052.test',
+				bookedTransactions: [xml],
+			};
+			const parted: PartedSegment = {
+				header: {
+					segId: PARTED.Id,
+					segNr: 3,
+					version: 1,
+				},
+				originalId: HICAZ.Id,
+				rawData: encode(camtSegment).slice(0, -1),
+			};
+			const status: HIRMSSegment = {
+				header: {
+					segId: HIRMS.Id,
+					segNr: 4,
+					version: HIRMS.Version,
+				},
+				answers: continuationMark
+					? [
+							{
+								code: 3040,
+								text: 'More transactions',
+								params: [continuationMark],
+							},
+						]
+					: [
+							{
+								code: 20,
+								text: 'Success',
+							},
+						],
+			};
+
+			return new Message([parted, status]);
+		}
+		function createCamtTestInteraction(): StatementInteractionCAMT {
+			const bpd = config.bankingInformation.bpd;
+
+			if (!bpd) {
+				throw new Error('Test setup failed: missing BPD');
+			}
+			bpd.allowedTransactions.push({
+				transId: 'HKCAZ',
+				tanRequired: false,
+				versions: [1],
+			} as BankTransaction);
+			const interaction = new StatementInteractionCAMT('TEST_ACCOUNT');
+			vi.spyOn(interaction, 'getSegments').mockReturnValue([
+				{
+					header: {
+						segId: 'HKCAZ',
+						segNr: 0,
+						version: 1,
+					},
+				},
+			]);
+
+			return interaction;
+		}
+		it('merges independently decodable HICAZ pages', async () => {
+			const iban = 'DE00000000000000000000'; // Synthetic account
+			const xmlA = '<Document><Page>first</Page></Document>';
+			const xmlB = '<Document><Page>second</Page></Document>';
+			function makePartedPage(xml: string, hasMore: boolean): Message {
+				const camtSegment: HICAZSegment = {
+					header: {
+						segId: HICAZ.Id,
+						segNr: 3,
+						version: HICAZ.Version,
+					},
+					account: { iban },
+					camtDescriptor: 'camt.052.test',
+					bookedTransactions: [xml],
+				};
+				const parted: PartedSegment = {
+					header: {
+						segId: PARTED.Id,
+						segNr: 3,
+						version: 1,
+					},
+					originalId: HICAZ.Id,
+					rawData: encode(camtSegment).slice(0, -1),
+				};
+				const status: HIRMSSegment = {
+					header: {
+						segId: HIRMS.Id,
+						segNr: 4,
+						version: HIRMS.Version,
+					},
+					answers: hasMore
+						? [
+								{
+									code: 3040,
+									text: 'More transactions',
+									params: ['PAGE_2'],
+								},
+							]
+						: [
+								{
+									code: 20,
+									text: 'Success',
+								},
+							],
+				};
+
+				return new Message([parted, status]);
+			}
+			const bpd = config.bankingInformation.bpd;
+			if (!bpd) {
+				throw new Error('Test setup failed: missing BPD');
+			}
+			// Allow HKCAZ in the mocked bank configuration.
+			bpd.allowedTransactions.push({
+				transId: 'HKCAZ',
+				tanRequired: false,
+				versions: [1],
+			} as BankTransaction);
+			const interaction = new StatementInteractionCAMT('TEST_ACCOUNT');
+			// We only want to test response assembly, not request encoding.
+			vi.spyOn(interaction, 'getSegments').mockReturnValue([
+				{
+					header: {
+						segId: 'HKCAZ',
+						segNr: 0,
+						version: 1,
+					},
+				},
+			]);
+			// Inspect the HICAZ segment that reaches the interaction.
+			const handleResponse = vi
+				.spyOn(interaction, 'handleClientResponse')
+				.mockImplementation((message) => {
+					// PARTED must have been replaced by the decoded HICAZ.
+					expect(message.findSegment(PARTED.Id)).toBeUndefined();
+
+					// Both XML documents must remain separate.
+					expect(message.findSegment<HICAZSegment>(HICAZ.Id)?.bookedTransactions).toEqual([
+						xmlA,
+						xmlB,
+					]);
+
+					return {
+						dialogId: 'MOCK_DIALOG_123',
+						success: true,
+						requiresTan: false,
+						bankingInformationUpdated: false,
+						bankAnswers: message.getBankAnswers(),
+					};
+				});
+			dialog.addCustomerInteraction(interaction);
+			// Simulate the bank's sequential responses.
+			httpClientSendMessageMock
+				.mockResolvedValueOnce(new Message([]))
+				.mockResolvedValueOnce(makePartedPage(xmlA, true))
+				.mockResolvedValueOnce(makePartedPage(xmlB, false))
+				.mockResolvedValueOnce(new Message([]));
+			await dialog.start();
+			// Init + first statement page + continuation + end.
+			expect(httpClientSendMessageMock).toHaveBeenCalledTimes(4);
+			expect(handleResponse).toHaveBeenCalledTimes(1);
+			// Verify the continuation marker was sent to the bank.
+			const continuationMessage = httpClientSendMessageMock.mock.calls[2][0] as Message;
+			expect(
+				(
+					continuationMessage.findSegment('HKCAZ') as {
+						continuationMark?: string;
+					}
+				)?.continuationMark,
+			).toBe('PAGE_2');
+		});
+		it('reassembles a CAMT document split across PARTED responses', async () => {
+			const iban = 'DE00000000000000000000';
+			const xml = '<Document><Page>fragmented</Page></Document>';
+
+			const camtSegment: HICAZSegment = {
+				header: {
+					segId: HICAZ.Id,
+					segNr: 3,
+					version: HICAZ.Version,
+				},
+				account: { iban },
+				camtDescriptor: 'camt.052.test',
+				bookedTransactions: [xml],
+			};
+			// Encode one complete, valid HICAZ segment.
+			const encoded = encode(camtSegment).slice(0, -1);
+			// Split the encoded segment inside the XML content.
+			// Neither fragment contains a complete CAMT document.
+			const fragmentPosition = encoded.indexOf('fragmented');
+			expect(fragmentPosition).toBeGreaterThan(0);
+			const splitAt = fragmentPosition + 4;
+			const firstFragment = encoded.slice(0, splitAt);
+			// Continuation fragments repeat the segment header.
+			// The original assembly logic removes this repeated header.
+			const headerEnd = encoded.indexOf('+') + 1;
+			const secondFragment = encoded.slice(0, headerEnd) + encoded.slice(splitAt);
+			// Verify that these fragments reconstruct the original segment.
+			expect(firstFragment + secondFragment.slice(secondFragment.indexOf('+') + 1)).toBe(encoded);
+			function makePartedResponse(rawData: string, hasMore: boolean): Message {
+				const parted: PartedSegment = {
+					header: {
+						segId: PARTED.Id,
+						segNr: 3,
+						version: 1,
+					},
+					originalId: HICAZ.Id,
+					rawData,
+				};
+				const status: HIRMSSegment = {
+					header: {
+						segId: HIRMS.Id,
+						segNr: 4,
+						version: HIRMS.Version,
+					},
+					answers: hasMore
+						? [
+								{
+									code: 3040,
+									text: 'More statement data',
+									params: ['NEXT_FRAGMENT'],
+								},
+							]
+						: [
+								{
+									code: 20,
+									text: 'Success',
+								},
+							],
+				};
+				return new Message([parted, status]);
+			}
+			// Enable HKCAZ for the test bank.
+			const bpd = config.bankingInformation.bpd;
+			if (!bpd) {
+				throw new Error('Test setup failed: missing BPD');
+			}
+			bpd.allowedTransactions.push({
+				transId: 'HKCAZ',
+				tanRequired: false,
+				versions: [1],
+			} as BankTransaction);
+			const interaction = new StatementInteractionCAMT('TEST_ACCOUNT');
+			vi.spyOn(interaction, 'getSegments').mockReturnValue([
+				{
+					header: {
+						segId: 'HKCAZ',
+						segNr: 0,
+						version: 1,
+					},
+				},
+			]);
+			// Verify that the reconstructed statement is complete.
+			const handleResponse = vi
+				.spyOn(interaction, 'handleClientResponse')
+				.mockImplementation((message) => {
+					expect(message.findSegment(PARTED.Id)).toBeUndefined();
+					const hicaz = message.findSegment<HICAZSegment>(HICAZ.Id);
+					expect(hicaz).toBeDefined();
+					expect(hicaz?.account.iban).toBe(iban);
+					// Exactly ONE complete XML document, not two fragments.
+					expect(hicaz?.bookedTransactions).toEqual([xml]);
+					return {
+						dialogId: 'MOCK_DIALOG_123',
+						success: true,
+						requiresTan: false,
+						bankingInformationUpdated: false,
+						bankAnswers: message.getBankAnswers(),
+					};
+				});
+			dialog.addCustomerInteraction(interaction);
+			httpClientSendMessageMock
+				.mockResolvedValueOnce(new Message([]))
+				.mockResolvedValueOnce(makePartedResponse(firstFragment, true))
+				.mockResolvedValueOnce(makePartedResponse(secondFragment, false))
+				.mockResolvedValueOnce(new Message([]));
+			await dialog.start();
+			expect(httpClientSendMessageMock).toHaveBeenCalledTimes(4);
+			expect(handleResponse).toHaveBeenCalledTimes(1);
+			const continuationMessage = httpClientSendMessageMock.mock.calls[2][0] as Message;
+			expect(
+				(
+					continuationMessage.findSegment('HKCAZ') as {
+						continuationMark?: string;
+					}
+				)?.continuationMark,
+			).toBe('NEXT_FRAGMENT');
+		});
+		it('reassembles CAMT fragments split inside a binary length prefix', async () => {
+			const iban = 'DE00000000000000000000';
+			const xml = '<Document><Page>fragmented</Page></Document>';
+
+			const camtSegment: HICAZSegment = {
+				header: {
+					segId: HICAZ.Id,
+					segNr: 3,
+					version: HICAZ.Version,
+				},
+				account: { iban },
+				camtDescriptor: 'camt.052.test',
+				bookedTransactions: [xml],
+			};
+			// Encode one complete, valid HICAZ segment.
+			const encoded = encode(camtSegment).slice(0, -1);
+			// Split the encoded segment inside the XML content.
+			// Neither fragment contains a complete CAMT document.
+			const fragmentPosition = encoded.indexOf('fragmented');
+			expect(fragmentPosition).toBeGreaterThan(0);
+			const binaryMarker = encoded.indexOf('@');
+			expect(binaryMarker).toBeGreaterThan(0);
+			// Split inside the @length@ prefix.
+			const splitAt = binaryMarker + 2;
+			const firstFragment = encoded.slice(0, splitAt);
+			// Continuation fragments repeat the segment header.
+			// The original assembly logic removes this repeated header.
+			const headerEnd = encoded.indexOf('+') + 1;
+			const secondFragment = encoded.slice(0, headerEnd) + encoded.slice(splitAt);
+			// Verify that these fragments reconstruct the original segment.
+			expect(firstFragment + secondFragment.slice(secondFragment.indexOf('+') + 1)).toBe(encoded);
+			function makePartedResponse(rawData: string, hasMore: boolean): Message {
+				const parted: PartedSegment = {
+					header: {
+						segId: PARTED.Id,
+						segNr: 3,
+						version: 1,
+					},
+					originalId: HICAZ.Id,
+					rawData,
+				};
+				const status: HIRMSSegment = {
+					header: {
+						segId: HIRMS.Id,
+						segNr: 4,
+						version: HIRMS.Version,
+					},
+					answers: hasMore
+						? [
+								{
+									code: 3040,
+									text: 'More statement data',
+									params: ['NEXT_FRAGMENT'],
+								},
+							]
+						: [
+								{
+									code: 20,
+									text: 'Success',
+								},
+							],
+				};
+				return new Message([parted, status]);
+			}
+			// Enable HKCAZ for the test bank.
+			const bpd = config.bankingInformation.bpd;
+			if (!bpd) {
+				throw new Error('Test setup failed: missing BPD');
+			}
+			bpd.allowedTransactions.push({
+				transId: 'HKCAZ',
+				tanRequired: false,
+				versions: [1],
+			} as BankTransaction);
+			const interaction = new StatementInteractionCAMT('TEST_ACCOUNT');
+			vi.spyOn(interaction, 'getSegments').mockReturnValue([
+				{
+					header: {
+						segId: 'HKCAZ',
+						segNr: 0,
+						version: 1,
+					},
+				},
+			]);
+			// Verify that the reconstructed statement is complete.
+			const handleResponse = vi
+				.spyOn(interaction, 'handleClientResponse')
+				.mockImplementation((message) => {
+					expect(message.findSegment(PARTED.Id)).toBeUndefined();
+					const hicaz = message.findSegment<HICAZSegment>(HICAZ.Id);
+					expect(hicaz).toBeDefined();
+					expect(hicaz?.account.iban).toBe(iban);
+					// Exactly ONE complete XML document, not two fragments.
+					expect(hicaz?.bookedTransactions).toEqual([xml]);
+					return {
+						dialogId: 'MOCK_DIALOG_123',
+						success: true,
+						requiresTan: false,
+						bankingInformationUpdated: false,
+						bankAnswers: message.getBankAnswers(),
+					};
+				});
+			dialog.addCustomerInteraction(interaction);
+			httpClientSendMessageMock
+				.mockResolvedValueOnce(new Message([]))
+				.mockResolvedValueOnce(makePartedResponse(firstFragment, true))
+				.mockResolvedValueOnce(makePartedResponse(secondFragment, false))
+				.mockResolvedValueOnce(new Message([]));
+			await dialog.start();
+			expect(httpClientSendMessageMock).toHaveBeenCalledTimes(4);
+			expect(handleResponse).toHaveBeenCalledTimes(1);
+			const continuationMessage = httpClientSendMessageMock.mock.calls[2][0] as Message;
+			expect(
+				(
+					continuationMessage.findSegment('HKCAZ') as {
+						continuationMark?: string;
+					}
+				)?.continuationMark,
+			).toBe('NEXT_FRAGMENT');
+		});
+		it('merges three independently decodable HICAZ pages', async () => {
+			const iban = 'DE00000000000000000000';
+			const xmlA = '<Document><Page>first</Page></Document>';
+			const xmlB = '<Document><Page>second</Page></Document>';
+			const xmlC = '<Document><Page>third</Page></Document>';
+			const interaction = createCamtTestInteraction();
+			const handleResponse = vi
+				.spyOn(interaction, 'handleClientResponse')
+				.mockImplementation((message) => {
+					// No PARTED segment should remain.
+					expect(message.findSegment(PARTED.Id)).toBeUndefined();
+					const hicaz = message.findSegment<HICAZSegment>(HICAZ.Id);
+					expect(hicaz).toBeDefined();
+					expect(hicaz?.account.iban).toBe(iban);
+					// All three XML documents must be preserved separately,
+					// in their original order.
+					expect(hicaz?.bookedTransactions).toEqual([xmlA, xmlB, xmlC]);
+					return {
+						dialogId: 'MOCK_DIALOG_123',
+						success: true,
+						requiresTan: false,
+						bankingInformationUpdated: false,
+						bankAnswers: message.getBankAnswers(),
+					};
+				});
+			dialog.addCustomerInteraction(interaction);
+			httpClientSendMessageMock
+				// Dialog initialization
+				.mockResolvedValueOnce(new Message([]))
+				// First CAMT page: another page follows
+				.mockResolvedValueOnce(makeCompleteCamtPage(xmlA, iban, 'PAGE_2'))
+				// Second CAMT page: one more page follows
+				.mockResolvedValueOnce(makeCompleteCamtPage(xmlB, iban, 'PAGE_3'))
+				// Third CAMT page: no more data
+				.mockResolvedValueOnce(makeCompleteCamtPage(xmlC, iban))
+				// Dialog ending
+				.mockResolvedValueOnce(new Message([]));
+			await dialog.start();
+			// Init + 3 statement pages + end = 5 requests
+			expect(httpClientSendMessageMock).toHaveBeenCalledTimes(5);
+			// The completed statement is processed exactly once.
+			expect(handleResponse).toHaveBeenCalledTimes(1);
+		});
+		it('rejects CAMT continuation pages from a different account', async () => {
+			const ibanA = 'DE00000000000000000000';
+			const ibanB = 'DE11111111111111111111';
+			const xmlA = '<Document><Page>account A</Page></Document>';
+			const xmlB = '<Document><Page>account B</Page></Document>';
+			const interaction = createCamtTestInteraction();
+			const handleResponse = vi.spyOn(interaction, 'handleClientResponse');
+			dialog.addCustomerInteraction(interaction);
+			httpClientSendMessageMock
+				// Dialog initialization
+				.mockResolvedValueOnce(new Message([]))
+				// First page belongs to account A.
+				.mockResolvedValueOnce(makeCompleteCamtPage(xmlA, ibanA, 'PAGE_2'))
+				// Continuation unexpectedly belongs to account B.
+				.mockResolvedValueOnce(makeCompleteCamtPage(xmlB, ibanB));
+			// Mixing statements from different accounts must fail.
+			await expect(dialog.start()).rejects.toThrow('CAMT continuation belongs to another account');
+
+			// Init + first page + second page
+			expect(httpClientSendMessageMock).toHaveBeenCalledTimes(3);
+
+			// The invalid statement must never reach the parser.
+			expect(handleResponse).not.toHaveBeenCalled();
 		});
 	});
 });

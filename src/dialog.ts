@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { TanMediaRequirement, TanProcess } from './codes.js';
 import type { FinTSConfig } from './config.js';
 import { HttpClient } from './httpClient.js';
@@ -12,7 +13,7 @@ import { CustomerMessage, CustomerOrderMessage, type Message } from './message.j
 import { PARTED, type PartedSegment } from './partedSegment.js';
 import type { Segment, SegmentWithContinuationMark } from './segment.js';
 import { decode } from './segment.js';
-import { HICAZ } from './segments/HICAZ.js';
+import { HICAZ, type HICAZSegment } from './segments/HICAZ.js';
 import { HIKAZ } from './segments/HIKAZ.js';
 import { HKEND } from './segments/HKEND.js';
 import { HKTAN, type HKTANSegment } from './segments/HKTAN.js';
@@ -65,8 +66,12 @@ export class Dialog {
 
 		do {
 			const message = this.createCurrentCustomerMessage();
-			const responseMessage = await this.httpClient.sendMessage(message);
-			await this.handlePartedMessages(message, responseMessage, this.currentInteraction);
+			let responseMessage = await this.httpClient.sendMessage(message);
+			responseMessage = await this.handlePartedMessages(
+				message,
+				responseMessage,
+				this.currentInteraction,
+			);
 			await this.handleStatementContinuation(responseMessage, this.currentInteraction);
 			clientResponse = this.currentInteraction.handleClientResponse(responseMessage);
 			this.checkEnded(clientResponse);
@@ -115,8 +120,12 @@ export class Dialog {
 			const message = isFirstMessage
 				? this.createCurrentTanMessage(tanOrderReference, tan)
 				: this.createCurrentCustomerMessage();
-			const responseMessage = await this.httpClient.sendMessage(message);
-			await this.handlePartedMessages(message, responseMessage, this.currentInteraction);
+			let responseMessage = await this.httpClient.sendMessage(message);
+			responseMessage = await this.handlePartedMessages(
+				message,
+				responseMessage,
+				this.currentInteraction,
+			);
 			await this.handleStatementContinuation(responseMessage, this.currentInteraction);
 			clientResponse = this.currentInteraction.handleClientResponse(responseMessage);
 			this.checkEnded(clientResponse);
@@ -283,52 +292,108 @@ export class Dialog {
 		message: CustomerMessage,
 		responseMessage: Message,
 		interaction: CustomerInteraction,
-	) {
+	): Promise<Message> {
 		let partedSegment = responseMessage.findSegment<PartedSegment>(PARTED.Id);
 
-		if (partedSegment) {
-			while (responseMessage.hasReturnCode(3040)) {
-				const answers = responseMessage.getBankAnswers();
-				const segmentWithContinuation = message.segments.find(
-					(s) => s.header.segId === interaction.segId,
-				) as SegmentWithContinuationMark;
-				if (!segmentWithContinuation) {
-					throw new Error(
-						`Response contains segment with further information, but corresponding segment could not be found or is not specified`,
-					);
+		if (!partedSegment) {
+			return responseMessage;
+		}
+		const isCamtStatement =
+			interaction instanceof CustomerOrderInteraction && interaction.responseSegId === HICAZ.Id;
+		let mergedCamt: HICAZSegment | undefined;
+		let pendingCamtRaw: string | undefined;
+		const addCamtPart = (rawData: string): void => {
+			// If the previous page was incomplete, join the fragments
+			// before attempting to decode.
+			if (pendingCamtRaw !== undefined) {
+				const headerEnd = rawData.indexOf('+');
+				if (headerEnd < 0) {
+					throw new Error('Invalid CAMT continuation fragment: missing segment header');
 				}
+				rawData = pendingCamtRaw + rawData.slice(headerEnd + 1);
+			}
+			if (!isCompleteCamtRawData(rawData)) {
+				pendingCamtRaw = rawData;
+				return;
+			}
 
-				const answer = answers.find((a) => a.code === 3040);
+			const decoded = decode(rawData);
+			if (decoded.header.segId !== HICAZ.Id) {
+				throw new Error('Unexpected CAMT segment type');
+			}
 
-				if (!answer || !answer.params || answer.params.length === 0) {
-					throw new Error(
-						'Expected bank answer to contain continuation mark parameters (code 3040)',
-					);
+			const camt = decoded as HICAZSegment;
+			if (mergedCamt) {
+				if (mergedCamt.account.iban !== camt.account.iban) {
+					throw new Error('CAMT continuation belongs to another account');
 				}
+				mergeStatementSegments(mergedCamt, camt);
+			} else {
+				mergedCamt = camt;
+			}
+			// We've successfully decoded a complete segment.
+			pendingCamtRaw = undefined;
+		};
+		if (isCamtStatement) {
+			addCamtPart(partedSegment.rawData);
+		}
+		while (responseMessage.hasReturnCode(3040)) {
+			const answers = responseMessage.getBankAnswers();
+			const segmentWithContinuation = message.segments.find(
+				(s) => s.header.segId === interaction.segId,
+			) as SegmentWithContinuationMark | undefined;
+			if (!segmentWithContinuation) {
+				throw new Error(
+					'Response contains further information, but corresponding request segment was not found',
+				);
+			}
 
-				segmentWithContinuation.continuationMark = answer.params[0];
-				const hnhbkSegment = message.findSegment<HNHBKSegment>(HNHBK.Id);
-				if (!hnhbkSegment) {
-					throw new Error('HNHBK segment not found in message');
-				}
-				hnhbkSegment.msgNr = ++this.lastMessageNumber;
-				const nextResponseMessage = await this.httpClient.sendMessage(message);
-				const nextPartedSegment = nextResponseMessage.findSegment<PartedSegment>(PARTED.Id);
+			const answer = answers.find((a) => a.code === 3040);
 
-				if (nextPartedSegment) {
+			if (!answer?.params?.length) {
+				throw new Error('Expected continuation mark parameters (code 3040)');
+			}
+
+			segmentWithContinuation.continuationMark = answer.params[0];
+			const hnhbkSegment = message.findSegment<HNHBKSegment>(HNHBK.Id);
+			if (!hnhbkSegment) {
+				throw new Error('HNHBK segment not found in message');
+			}
+			hnhbkSegment.msgNr = ++this.lastMessageNumber;
+			const nextResponseMessage = await this.httpClient.sendMessage(message);
+			const nextPartedSegment = nextResponseMessage.findSegment<PartedSegment>(PARTED.Id);
+
+			if (nextPartedSegment) {
+				if (isCamtStatement) {
+					// Either merge a complete page or accumulate a fragment.
+					addCamtPart(nextPartedSegment.rawData);
+				} else {
+					// Preserve existing behavior for other segment types.
 					nextPartedSegment.rawData =
 						partedSegment.rawData +
 						nextPartedSegment.rawData.slice(nextPartedSegment.rawData.indexOf('+') + 1);
-					partedSegment = nextPartedSegment;
 				}
-
-				responseMessage = nextResponseMessage;
+				partedSegment = nextPartedSegment;
+			} else if (isCamtStatement) {
+				throw new Error('Expected a CAMT continuation segment');
 			}
 
-			const completeSegment = decode(partedSegment.rawData);
-			const index = responseMessage.segments.indexOf(partedSegment);
-			responseMessage.segments.splice(index, 1, completeSegment);
+			responseMessage = nextResponseMessage;
 		}
+
+		if (isCamtStatement && pendingCamtRaw !== undefined) {
+			throw new Error('Incomplete CAMT segment after final page');
+		}
+		const completeSegment = isCamtStatement ? mergedCamt : decode(partedSegment.rawData);
+		if (!completeSegment) {
+			throw new Error('No complete CAMT segment was received');
+		}
+		const index = responseMessage.segments.indexOf(partedSegment);
+		if (index < 0) {
+			throw new Error('PARTED segment not found in final response');
+		}
+		responseMessage.segments.splice(index, 1, completeSegment);
+		return responseMessage;
 	}
 
 	/**
@@ -431,6 +496,49 @@ export class Dialog {
 	private getHttpClient(): HttpClient {
 		return new HttpClient(this.config.bankingUrl, this.config.debugEnabled);
 	}
+}
+
+/**
+ * Checks whether an encoded CAMT segment is complete.
+ * FinTS binary fields use @length@ where length is in UTF-8 bytes.
+ */
+function isCompleteCamtRawData(rawData: string): boolean {
+	// PARTED.rawData has no segment terminator.
+	// Use the declared binary field lengths to detect truncation.
+	const bytes = Buffer.from(rawData, 'utf8');
+	for (let i = 0; i < bytes.length; i++) {
+		if (bytes[i] !== 64) {
+			continue; // Not an @ character
+		}
+
+		const lengthStart = i + 1;
+		let lengthEnd = lengthStart;
+		// Read the decimal length between the two @ characters.
+		while (lengthEnd < bytes.length && bytes[lengthEnd] >= 48 && bytes[lengthEnd] <= 57) {
+			lengthEnd++;
+		}
+		// The fragment ends inside an unfinished @length@ prefix.
+		if (lengthEnd === bytes.length) {
+			return false;
+		}
+
+		if (lengthEnd === lengthStart || bytes[lengthEnd] !== 64) {
+			continue;
+		}
+
+		const length = Number(bytes.toString('ascii', lengthStart, lengthEnd));
+		if (!Number.isSafeInteger(length) || length < 0) {
+			return false;
+		}
+
+		const binaryEnd = lengthEnd + 1 + length;
+		if (binaryEnd > bytes.length) {
+			return false; // Binary payload is truncated
+		}
+		// Skip the binary payload, which may contain @ characters.
+		i = binaryEnd - 1;
+	}
+	return true;
 }
 
 /**
